@@ -1,0 +1,13 @@
+{
+  "name": "modtestbridge",
+  "version": "0.1.0",
+  "description": "Test Valheim mods in-game: build, restart straight into a test world, run the mod's test commands and read the results through ModTestBridge.",
+  "author": {
+    "name": "Tim MacDonald",
+    "url": "https://github.com/tmac1973"
+  },
+  "homepage": "https://github.com/tmac1973/ModTestBridge",
+  "repository": "https://github.com/tmac1973/ModTestBridge",
+  "license": "MIT",
+  "keywords": ["valheim", "bepinex", "modding", "testing"]
+}

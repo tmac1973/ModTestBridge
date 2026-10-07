@@ -1,0 +1,256 @@
+#!/usr/bin/env bash
+# mtb: the ModTestBridge client. Drives a running Valheim (with the ModTestBridge plugin) from a shell or an agent.
+#
+#   mtb status                          game state (starting/menu/loading/world), world, character, position
+#   mtb cmd "<console command>"         run a console command, print what it printed
+#   mtb run "<command>" "<text>" [s]    run a command, then wait (default 600 s) for a new log line containing text
+#   mtb log [from] [contains]           log lines from line N (0-based), optionally only those containing text
+#   mtb mark                            the log's current line number (pass it to mtb log to read what came after)
+#   mtb tail [n] [contains]             the last n (default 40) log lines, optionally only those containing text
+#   mtb wait-log "<text>" [s]           wait (default 600 s) for a new log line containing text; prints it
+#   mtb wait-world [s]                  wait (default 300 s) until a character is in a world
+#   mtb quit                            save, log out and quit the game
+#   mtb start [world] [character]       back up the saves, launch the game straight into the world (autostart)
+#   mtb restart [world] [character]     quit if running, back up, launch, wait until in the world
+#   mtb backup [world] [character]      copy the character and world saves (only while the game isn't running)
+#   mtb profiles                        mod-manager profiles that have ModTestBridge installed
+#   mtb doctor                          show what mtb found (profile, token, launch, saves) and whether the game answers
+#
+# Settings come from the environment, else ./.mtb (searched upward from the current directory), else
+# ~/.config/mtb/config (KEY=value lines). See README.md, "Configuring mtb".
+set -euo pipefail
+
+SETTINGS=(MTB_PROFILE MTB_PROFILE_DIR MTB_PORT MTB_WORLD MTB_CHARACTER MTB_TIMEOUT MTB_LAUNCH MTB_STEAM MTB_GAME_PATTERN
+          MTB_SAVES_DIRS MTB_CLOUD_DIRS MTB_KEEP_BACKUPS)
+load_settings() {
+  local -A keep=() ; local v f d
+  for v in "${SETTINGS[@]}"; do [[ -n "${!v+x}" ]] && keep[$v]="${!v}"; done
+  f="${XDG_CONFIG_HOME:-$HOME/.config}/mtb/config"; [[ -f "$f" ]] && source "$f"
+  d="$PWD"; while [[ "$d" != "/" && -n "$d" ]]; do [[ -f "$d/.mtb" ]] && { source "$d/.mtb"; break; }; d="$(dirname "$d")"; done
+  for v in "${!keep[@]}"; do printf -v "$v" "%s" "${keep[$v]}"; done
+}
+load_settings
+
+APP=892970
+PORT="${MTB_PORT:-7811}"
+URL="http://127.0.0.1:$PORT"
+case "${OSTYPE:-}" in msys*|cygwin*) WINDOWS=1 ;; *) WINDOWS=0 ;; esac
+PY="$(command -v python3 || command -v python || true)"
+[[ -n "$PY" ]] || { echo "mtb needs python3" >&2; exit 2; }
+command -v curl >/dev/null || { echo "mtb needs curl" >&2; exit 2; }
+json() { "$PY" -c "import sys,json; d=json.load(sys.stdin); $1"; }
+urlq() { "$PY" -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1]))' "$1"; }
+lower() { echo "$1" | tr '[:upper:]' '[:lower:]'; }
+
+# --- where things are ------------------------------------------------------------------------------------------------
+
+# Mod-manager profile folders (Gale, r2modman), Linux and Windows.
+manager_dirs() {
+  local appdata="${APPDATA:-}"
+  [[ $WINDOWS == 1 && -n "$appdata" ]] && appdata="$(cygpath -u "$appdata" 2>/dev/null || echo "$appdata")"
+  for d in "$HOME/.local/share/com.kesomannen.gale/valheim/profiles" "$HOME/.config/r2modmanPlus-local/Valheim/profiles" \
+           ${appdata:+"$appdata/com.kesomannen.gale/valheim/profiles"} ${appdata:+"$appdata/r2modmanPlus-local/Valheim/profiles"}; do
+    [[ -d "$d" ]] && echo "$d"
+  done
+}
+has_bridge() { compgen -G "$1/BepInEx/plugins/*/ModTestBridge.dll" >/dev/null || compgen -G "$1/BepInEx/plugins/ModTestBridge.dll" >/dev/null; }
+bridge_profiles() { local m p; while read -r m; do for p in "$m"/*/; do has_bridge "${p%/}" && echo "${p%/}"; done; done < <(manager_dirs); return 0; }
+
+profile_dir() {
+  if [[ -n "${MTB_PROFILE_DIR:-}" ]]; then echo "$MTB_PROFILE_DIR"; return; fi
+  if [[ -n "${MTB_PROFILE:-}" ]]; then
+    local m; while read -r m; do [[ -d "$m/$MTB_PROFILE" ]] && { echo "$m/$MTB_PROFILE"; return; }; done < <(manager_dirs)
+    echo "no mod-manager profile named $MTB_PROFILE (set MTB_PROFILE_DIR to the folder holding BepInEx)" >&2; return 1
+  fi
+  local found; found="$(bridge_profiles)"
+  case "$(echo -n "$found" | grep -c '^' || true)" in
+    1) echo "$found" ;;
+    0) echo "no profile with ModTestBridge installed found; set MTB_PROFILE or MTB_PROFILE_DIR" >&2; return 1 ;;
+    *) echo -e "several profiles have ModTestBridge; set MTB_PROFILE to one of:\n$found" >&2; return 1 ;;
+  esac
+}
+
+steam_root() {
+  if [[ $WINDOWS == 1 ]]; then echo "/c/Program Files (x86)/Steam"; return; fi
+  for d in "$HOME/.local/share/Steam" "$HOME/.steam/steam" "$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam"; do
+    [[ -d "$d/steamapps" ]] && { echo "$d"; return; }
+  done
+}
+steam_libraries() {
+  local root; root="$(steam_root)"; [[ -n "$root" ]] || return 0
+  echo "$root"
+  [[ -f "$root/steamapps/libraryfolders.vdf" ]] && sed -n 's/^\s*"path"\s*"\(.*\)"/\1/p' "$root/steamapps/libraryfolders.vdf" | sed 's#\\\\#/#g'
+}
+# Valheim under Proton: its prefix (empty when Valheim runs natively).
+proton_prefix() {
+  [[ $WINDOWS == 1 ]] && return 0
+  local l; while read -r l; do [[ -d "$l/steamapps/compatdata/$APP/pfx" ]] && { echo "$l/steamapps/compatdata/$APP/pfx"; return; }; done < <(steam_libraries | sort -u)
+}
+# Folders that hold characters_local/ and worlds_local/ (and, for older saves, characters/ and worlds/).
+saves_dirs() {
+  if [[ -n "${MTB_SAVES_DIRS:-}" ]]; then tr ':' '\n' <<<"$MTB_SAVES_DIRS"; return; fi
+  local pfx; pfx="$(proton_prefix)"
+  [[ -n "$pfx" ]] && echo "$pfx/drive_c/users/steamuser/AppData/LocalLow/IronGate/Valheim"
+  [[ $WINDOWS == 1 ]] && echo "${USERPROFILE:+$(cygpath -u "$USERPROFILE" 2>/dev/null || echo "$USERPROFILE")}/AppData/LocalLow/IronGate/Valheim"
+  [[ $WINDOWS == 0 ]] && echo "$HOME/.config/unity3d/IronGate/Valheim"
+  return 0
+}
+# Steam Cloud save folders (userdata/<account>/892970/remote).
+cloud_dirs() {
+  if [[ -n "${MTB_CLOUD_DIRS:-}" ]]; then tr ':' '\n' <<<"$MTB_CLOUD_DIRS"; return; fi
+  local root; root="$(steam_root)"; [[ -n "$root" ]] || return 0
+  for d in "$root"/userdata/*/$APP/remote; do [[ -d "$d" ]] && echo "$d"; done; return 0
+}
+
+TOKEN=""
+token() {
+  [[ -n "$TOKEN" ]] && return
+  local dir; dir="$(profile_dir)"
+  local f="$dir/BepInEx/config/ModTestBridge.token"
+  [[ -f "$f" ]] || { echo "no token at $f: run the game once with ModTestBridge enabled (Enabled = true in BepInEx/config/Spronglehump.ModTestBridge.cfg)" >&2; exit 2; }
+  TOKEN="$(tr -d '\r\n' <"$f")"
+}
+req() { token; curl -sS --max-time "${MTB_TIMEOUT:-30}" -H "X-Token: $TOKEN" "$@"; }
+log_next() { req "$URL/log?from=0&contains=%00" | json 'print(d["next"])'; }
+
+# --- the game process ------------------------------------------------------------------------------------------------
+
+game_pattern() {
+  [[ -n "${MTB_GAME_PATTERN:-}" ]] && { echo "$MTB_GAME_PATTERN"; return; }
+  if [[ -n "$(proton_prefix)" ]]; then echo '[v]alheim\.exe'; else echo '[v]alheim\.x86_64'; fi   # never valheim_server
+}
+running() {
+  if [[ $WINDOWS == 1 ]]; then tasklist //FI "IMAGENAME eq valheim.exe" 2>/dev/null | grep -qi '^valheim\.exe'; return; fi
+  pgrep -f "$(game_pattern)" >/dev/null
+}
+
+# How the profile is launched: as Gale and r2modman launch it (Steam, with BepInEx's doorstop pointed at the profile).
+launch_cmd() {
+  local dir; dir="$(profile_dir)"; local preloader="$dir/BepInEx/core/BepInEx.Preloader.dll"
+  if [[ -n "${MTB_LAUNCH:-}" ]]; then echo "$MTB_LAUNCH"; return; fi
+  if [[ $WINDOWS == 1 ]]; then
+    local steam="${MTB_STEAM:-$(steam_root)/steam.exe}"
+    printf '%q -applaunch %s --doorstop-enabled true --doorstop-target-assembly %q' "$steam" $APP "$(cygpath -w "$preloader" 2>/dev/null || echo "$preloader")"
+  elif [[ -n "$(proton_prefix)" ]]; then
+    printf '%q -applaunch %s --doorstop-enabled true --doorstop-target-assembly %q' "${MTB_STEAM:-steam}" $APP "Z:$preloader"
+  else
+    return 1   # native Linux: the mod manager's launch script differs between versions; set MTB_LAUNCH
+  fi
+}
+launch() {
+  local world="$1" character="$2" cmd
+  cmd="$(launch_cmd)" || { echo "don't know how to launch this setup (native Linux?): set MTB_LAUNCH; see README" >&2; exit 2; }
+  nohup bash -c "$cmd -console -mtb-world $(printf %q "$world") -mtb-character $(printf %q "$character")" >/dev/null 2>&1 &
+  echo "launching $(basename "$(profile_dir)") into $world as $character"
+}
+
+need_names() {
+  WORLD="${1:-${MTB_WORLD:-}}"; CHARACTER="${2:-${MTB_CHARACTER:-}}"
+  [[ -n "$WORLD" && -n "$CHARACTER" ]] || { echo "which world and character? pass them, or set MTB_WORLD and MTB_CHARACTER" >&2; exit 2; }
+}
+
+# Copies of the character and world (local and Steam Cloud saves), taken while the game isn't running; newest N kept.
+backup() {
+  running && { echo "not backing up while the game is running (saves may be half-written)" >&2; return 1; }
+  local c w root dest d n=0
+  c="$(lower "$CHARACTER")"; w="$(lower "$WORLD")"
+  root="$(profile_dir)/BepInEx/ModTestBridge/backups"; dest="$root/$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$dest"
+  while read -r d; do
+    [[ -n "$d" ]] || continue
+    for sub in characters_local characters; do [[ -e "$d/$sub/$c.fch" ]] && cp -a "$d/$sub/$c.fch" "$dest/$sub-$c.fch" && n=$((n+1)); done
+    for sub in worlds_local worlds; do
+      [[ -d "$d/$sub/$w" ]] && cp -a "$d/$sub/$w" "$dest/$sub-$w" && n=$((n+1))   # chunked world (current format)
+      for ext in db fwl; do [[ -e "$d/$sub/$w.$ext" ]] && cp -a "$d/$sub/$w.$ext" "$dest/$sub-$w.$ext" && n=$((n+1)); done
+    done
+  done < <(saves_dirs)
+  while read -r d; do
+    [[ -n "$d" ]] || continue
+    [[ -e "$d/characters/$c.fch" ]] && cp -a "$d/characters/$c.fch" "$dest/cloud-$c.fch" && n=$((n+1))
+    [[ -e "$d/worlds/$w" ]] && cp -a "$d/worlds/$w" "$dest/cloud-world-$w" && n=$((n+1))
+  done < <(cloud_dirs)
+  ls "$root" | sort | head -n "-${MTB_KEEP_BACKUPS:-5}" | while read -r old; do rm -rf "${root:?}/$old"; done
+  if (( n == 0 )); then echo "warning: found no saves for $CHARACTER / $WORLD to back up (see mtb doctor)" >&2; rmdir "$dest"
+  else echo "backed up to $dest: $(ls "$dest" | tr '\n' ' ')"; fi
+}
+
+wait_log() { # text timeout from
+  local text="$1" timeout="$2" from="$3" end=$((SECONDS + $2)) out hit
+  while (( SECONDS < end )); do
+    out=$(req "$URL/log?from=$from&contains=$(urlq "$text")") || { sleep 5; continue; }
+    hit=$(echo "$out" | json 'print("\n".join(d["lines"]))')
+    [[ -n "$hit" ]] && { echo "$hit"; return 0; }
+    sleep 3
+  done
+  echo "timed out after ${timeout}s waiting for: $text" >&2; return 1
+}
+
+wait_in_world() { # timeout; fails early if autostart refused
+  local end=$((SECONDS + $1)) st state auto
+  while (( SECONDS < end )); do
+    st=$(MTB_TIMEOUT=5 req "$URL/status" 2>/dev/null || true)
+    if [[ -n "$st" ]]; then
+      state=$(echo "$st" | json 'print(d["state"])'); auto=$(echo "$st" | json 'print(d.get("autostart") or "")')
+      [[ "$state" == "world" ]] && { echo "$st"; return 0; }
+      [[ "$auto" == refused* ]] && { echo "autostart $auto" >&2; return 1; }
+    fi
+    sleep 5
+  done
+  echo "timed out waiting for the world" >&2; return 1
+}
+
+doctor() {
+  local dir ok=1
+  echo "platform:   $([[ $WINDOWS == 1 ]] && echo Windows || { [[ -n "$(proton_prefix)" ]] && echo "Linux, Valheim under Proton" || echo "Linux, native Valheim"; })"
+  if dir="$(profile_dir 2>&1)"; then echo "profile:    $dir"; else echo "profile:    ?? $dir"; ok=0; fi
+  if (( ok )); then
+    has_bridge "$dir" && echo "plugin:     installed" || echo "plugin:     ?? ModTestBridge.dll not under $dir/BepInEx/plugins"
+    local cfg="$dir/BepInEx/config/Spronglehump.ModTestBridge.cfg"
+    [[ -f "$cfg" ]] && echo "enabled:    $(sed -n 's/^Enabled = //p' "$cfg")" || echo "enabled:    (no config yet: run the game once)"
+    [[ -f "$dir/BepInEx/config/ModTestBridge.token" ]] && echo "token:      found" || echo "token:      ?? none yet (written on the first run with Enabled = true)"
+    echo "launch:     $(launch_cmd 2>/dev/null || echo '?? unknown: set MTB_LAUNCH')"
+  fi
+  echo "world:      ${MTB_WORLD:-(unset: MTB_WORLD)}   character: ${MTB_CHARACTER:-(unset: MTB_CHARACTER)}"
+  echo "saves:      $(saves_dirs | while read -r d; do [[ -d "$d" ]] && echo -n "$d "; done)"
+  echo "cloud:      $(cloud_dirs | tr '\n' ' ')"
+  echo "game:       $(running && echo running || echo 'not running')"
+  (( ok )) && echo "bridge:     $(MTB_TIMEOUT=5 req "$URL/status" 2>&1 || true)"
+}
+
+case "${1:-status}" in
+  status) req "$URL/status" | json 'print(json.dumps(d))' ;;
+  cmd)    shift; req -X POST --data-binary "$*" "$URL/command" | json 'print("\n".join(d.get("output") or [])) if "output" in d else print(d)' ;;
+  run)
+    [[ $# -ge 3 ]] || { echo 'usage: mtb run "<command>" "<text to wait for>" [timeout]' >&2; exit 2; }
+    from=$(log_next)   # before the command, so a fast result isn't missed
+    req -X POST --data-binary "$2" "$URL/command" | json 'print("\n".join(d.get("output") or [])) if "output" in d else print(d)'
+    wait_log "$3" "${4:-600}" "$from" ;;
+  log)    req "$URL/log?from=${2:-0}&contains=$(urlq "${3:-}")" \
+            | json 'print("\n".join(d["lines"])); print("# next=%d" % d["next"], file=sys.stderr)' ;;
+  tail)
+    n="${2:-40}"; next=$(log_next)
+    if [[ -n "${3:-}" ]]; then req "$URL/log?from=0&contains=$(urlq "$3")" | json "print('\n'.join(d['lines'][-$n:]))"
+    else req "$URL/log?from=$(( next > n ? next - n : 0 ))" | json 'print("\n".join(d["lines"]))'; fi ;;
+  mark)   log_next ;;
+  wait-log) [[ $# -ge 2 ]] || { echo 'usage: mtb wait-log "<text>" [timeout]' >&2; exit 2; }; wait_log "$2" "${3:-600}" "$(log_next)" ;;
+  wait-world) wait_in_world "${2:-300}" ;;
+  quit)   req -X POST --data "" "$URL/quit" | json 'print(d)' ;;
+  start)  need_names "${2:-}" "${3:-}"; running && { echo "the game is already running (use mtb restart)" >&2; exit 1; }
+          backup || true; launch "$WORLD" "$CHARACTER" ;;
+  restart)
+    need_names "${2:-}" "${3:-}"
+    if running; then
+      req -X POST --data "" "$URL/quit" >/dev/null 2>&1 || true
+      end=$((SECONDS + 120)); while running && (( SECONDS < end )); do sleep 2; done
+      running && { echo "the game didn't quit within 120 s" >&2; exit 1; }
+      sleep 3
+    fi
+    backup || true
+    launch "$WORLD" "$CHARACTER"
+    wait_in_world 400 ;;
+  backup)   need_names "${2:-}" "${3:-}"; backup ;;
+  profiles) bridge_profiles ;;
+  doctor)   doctor ;;
+  help|-h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *)      sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

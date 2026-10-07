@@ -1,0 +1,9 @@
+{
+    "name": "ModTestBridge",
+    "version_number": "0.1.0",
+    "website_url": "https://github.com/tmac1973/ModTestBridge",
+    "description": "For mod developers: drive Valheim from scripts or an AI agent (run console commands, read the log, restart into a world). Off by default; dev profiles only.",
+    "dependencies": [
+        "denikson-BepInExPack_Valheim-5.4.2350"
+    ]
+}

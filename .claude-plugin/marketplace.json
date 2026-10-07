@@ -1,0 +1,20 @@
+{
+  "name": "modtestbridge",
+  "owner": {
+    "name": "Tim MacDonald",
+    "url": "https://github.com/tmac1973"
+  },
+  "metadata": {
+    "description": "Tools for testing Valheim mods in the running game with Claude Code."
+  },
+  "plugins": [
+    {
+      "name": "modtestbridge",
+      "source": "./claude-plugin",
+      "description": "Test Valheim mods in-game: build, restart straight into a test world, run the mod's test commands and read the results through ModTestBridge.",
+      "version": "0.1.0",
+      "license": "MIT",
+      "keywords": ["valheim", "bepinex", "modding", "testing"]
+    }
+  ]
+}

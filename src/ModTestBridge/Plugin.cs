@@ -45,11 +45,16 @@ namespace ModTestBridge
 
         private void Awake()
         {
-            _enabled = Config.Bind("General", "Enabled", true, "Listen for requests (127.0.0.1 only, token required).");
+            _enabled = Config.Bind("General", "Enabled", false,
+                "Listen for requests (127.0.0.1 only, token required). Off until you turn it on: anything that can reach the port " +
+                "with the token can run console commands, so only on development profiles.");
             _port = Config.Bind("General", "Port", 7811, "Local port to listen on.");
             new Harmony(Guid).PatchAll(typeof(Plugin).Assembly);
             if (!_enabled.Value)
+            {
+                Logger.LogWarning($"ModTestBridge is off: set Enabled = true in {Config.ConfigFilePath} (development profiles only)");
                 return;
+            }
             _token = LoadToken();
             try
             {
