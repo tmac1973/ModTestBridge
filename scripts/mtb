@@ -14,7 +14,7 @@ TOKEN_FILE="$HOME/.local/share/com.kesomannen.gale/valheim/profiles/$PROFILE/Bep
 [[ -f "$TOKEN_FILE" ]] || { echo "no token at $TOKEN_FILE (has the game run with ModTestBridge?)" >&2; exit 2; }
 TOKEN="$(cat "$TOKEN_FILE")"
 URL="http://127.0.0.1:$PORT"
-req() { curl -sS --max-time "${3:-30}" -H "X-Token: $TOKEN" "$@" ; }
+req() { curl -sS --max-time "${MTB_TIMEOUT:-30}" -H "X-Token: $TOKEN" "$@" ; }
 json() { python3 -c "import sys,json; d=json.load(sys.stdin); $1"; }
 
 case "${1:-status}" in
@@ -36,7 +36,7 @@ case "${1:-status}" in
   wait-world)
     timeout="${2:-300}"; end=$((SECONDS + timeout))
     while (( SECONDS < end )); do
-      state=$(req "$URL/status" 5 2>/dev/null | json 'print(d["state"])' 2>/dev/null || echo down)
+      state=$(MTB_TIMEOUT=5 req "$URL/status" 2>/dev/null | json 'print(d["state"])' 2>/dev/null || echo down)
       [[ "$state" == "world" ]] && { echo world; exit 0; }
       sleep 5
     done
