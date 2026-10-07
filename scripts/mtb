@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# ModTestBridge client.
+#   mtb status                      game state (menu/loading/world), world, character, position
+#   mtb cmd "<console command>"     run a console command, print what it printed
+#   mtb log [from] [contains]       BepInEx log lines from line N (0-based), optionally only those containing text
+#   mtb wait-log <text> [timeout]   wait until a new log line contains the text (default 600 s); prints it
+#   mtb wait-world [timeout]        wait until a character is in a world
+#   mtb quit                        save, log out and quit the game
+# Env: MTB_PROFILE (default vikingsforhire-dev), MTB_PORT (7811).
+set -euo pipefail
+PROFILE="${MTB_PROFILE:-vikingsforhire-dev}"
+PORT="${MTB_PORT:-7811}"
+TOKEN_FILE="$HOME/.local/share/com.kesomannen.gale/valheim/profiles/$PROFILE/BepInEx/config/ModTestBridge.token"
+[[ -f "$TOKEN_FILE" ]] || { echo "no token at $TOKEN_FILE (has the game run with ModTestBridge?)" >&2; exit 2; }
+TOKEN="$(cat "$TOKEN_FILE")"
+URL="http://127.0.0.1:$PORT"
+req() { curl -sS --max-time "${3:-30}" -H "X-Token: $TOKEN" "$@" ; }
+json() { python3 -c "import sys,json; d=json.load(sys.stdin); $1"; }
+
+case "${1:-status}" in
+  status) req "$URL/status" | json 'print(json.dumps(d))' ;;
+  cmd)    shift; req -X POST --data-binary "$*" "$URL/command" | json 'print("\n".join(d.get("output") or [])) if "output" in d else print(d)' ;;
+  log)    req "$URL/log?from=${2:-0}&contains=$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1]))' "${3:-}")" \
+            | json 'print("\n".join(d["lines"])); print("# next=%d" % d["next"], file=sys.stderr)' ;;
+  wait-log)
+    text="$2"; timeout="${3:-600}"
+    from=$(req "$URL/log?from=0&contains=%00" | json 'print(d["next"])')
+    end=$((SECONDS + timeout))
+    while (( SECONDS < end )); do
+      out=$(req "$URL/log?from=$from&contains=$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1]))' "$text")") || { sleep 5; continue; }
+      hit=$(echo "$out" | json 'print("\n".join(d["lines"]))')
+      if [[ -n "$hit" ]]; then echo "$hit"; exit 0; fi
+      sleep 5
+    done
+    echo "timed out waiting for: $text" >&2; exit 1 ;;
+  wait-world)
+    timeout="${2:-300}"; end=$((SECONDS + timeout))
+    while (( SECONDS < end )); do
+      state=$(req "$URL/status" 5 2>/dev/null | json 'print(d["state"])' 2>/dev/null || echo down)
+      [[ "$state" == "world" ]] && { echo world; exit 0; }
+      sleep 5
+    done
+    echo "timed out waiting for a world" >&2; exit 1 ;;
+  quit)   req -X POST "$URL/quit" | json 'print(d)' ;;
+  *)      sed -n '2,10p' "$0"; exit 2 ;;
+esac

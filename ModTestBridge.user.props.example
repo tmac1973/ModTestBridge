@@ -1,0 +1,7 @@
+<!-- Copy to ModTestBridge.user.props (git-ignored) to override local paths. -->
+<Project>
+  <PropertyGroup>
+    <ValheimDir>/games/SteamLibrary/steamapps/common/Valheim</ValheimDir>
+    <GaleProfileDirs>$(HOME)/.local/share/com.kesomannen.gale/valheim/profiles/vikingsforhire-dev;$(HOME)/.local/share/com.kesomannen.gale/valheim/profiles/pullmats-dev</GaleProfileDirs>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,14 @@
+<Project>
+  <!-- Optional per-machine overrides (git-ignored). See ModTestBridge.user.props.example. -->
+  <Import Project="$(MSBuildThisFileDirectory)ModTestBridge.user.props" Condition="Exists('$(MSBuildThisFileDirectory)ModTestBridge.user.props')" />
+
+  <PropertyGroup>
+    <ValheimDir Condition="'$(ValheimDir)' == ''">/games/SteamLibrary/steamapps/common/Valheim</ValheimDir>
+    <!-- The dev profile(s) to deploy into, separated by ';'. Never a release or server profile. -->
+    <GaleProfileDirs Condition="'$(GaleProfileDirs)' == ''">$(HOME)/.local/share/com.kesomannen.gale/valheim/profiles/vikingsforhire-dev</GaleProfileDirs>
+    <FirstProfileDir>$([System.String]::Copy('$(GaleProfileDirs)').Split(';')[0])</FirstProfileDir>
+
+    <ManagedDir>$(ValheimDir)/valheim_Data/Managed</ManagedDir>
+    <BepInExCoreDir>$(FirstProfileDir)/BepInEx/core</BepInExCoreDir>
+  </PropertyGroup>
+</Project>
