@@ -212,6 +212,7 @@ namespace ModTestBridge
                 ("server", ZNet.instance != null && ZNet.instance.IsServer()),
                 ("fps", Time.deltaTime > 0f ? 1f / Time.deltaTime : 0f),
                 ("time", Time.time),
+                ("autostart", AutoStart.State),
                 ("bridge", Version));
         }
 
