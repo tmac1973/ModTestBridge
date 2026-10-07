@@ -35,6 +35,7 @@ backup() {
   for local in "$HOME"/.local/share/Steam/steamapps/compatdata/892970 /games/SteamLibrary/steamapps/compatdata/892970; do
     local base="$local/pfx/drive_c/users/steamuser/AppData/LocalLow/IronGate/Valheim"
     [[ -e "$base/characters_local/$c.fch" ]] && cp -a "$base/characters_local/$c.fch" "$dest/local-$c.fch"
+    [[ -d "$base/worlds_local/$w" ]] && cp -a "$base/worlds_local/$w" "$dest/local-world-$w"   # chunked world (current format)
     for ext in db fwl; do [[ -e "$base/worlds_local/$w.$ext" ]] && cp -a "$base/worlds_local/$w.$ext" "$dest/"; done
   done
   ls "$(dirname "$dest")" | sort | head -n -5 | while read -r old; do rm -rf "$(dirname "$dest")/$old"; done
