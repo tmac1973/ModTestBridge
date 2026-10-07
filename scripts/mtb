@@ -21,6 +21,26 @@ json() { python3 -c "import sys,json; d=json.load(sys.stdin); $1"; }
 
 GAME_PATTERN='[v]alheim\.exe'   # the client under Proton (not valheim_server)
 running() { pgrep -f "$GAME_PATTERN" >/dev/null; }
+# Copies of the character and world saves (Steam Cloud and local), taken while the game isn't running; newest 5 kept.
+backup() {
+  local world="${1:-${MTB_WORLD:-testboy}}" character="${2:-${MTB_CHARACTER:-Testboy}}"
+  local dest="$HOME/.local/share/com.kesomannen.gale/valheim/profiles/$PROFILE/BepInEx/ModTestBridge/backups/$(date +%Y%m%d-%H%M%S)"
+  local c; c=$(echo "$character" | tr '[:upper:]' '[:lower:]')
+  local w; w=$(echo "$world" | tr '[:upper:]' '[:lower:]')
+  mkdir -p "$dest"
+  for remote in "$HOME"/.local/share/Steam/userdata/*/892970/remote; do
+    [[ -e "$remote/characters/$c.fch" ]] && cp -a "$remote/characters/$c.fch" "$dest/"
+    [[ -e "$remote/worlds/$w" ]] && cp -a "$remote/worlds/$w" "$dest/cloud-world-$w"
+  done
+  for local in "$HOME"/.local/share/Steam/steamapps/compatdata/892970 /games/SteamLibrary/steamapps/compatdata/892970; do
+    local base="$local/pfx/drive_c/users/steamuser/AppData/LocalLow/IronGate/Valheim"
+    [[ -e "$base/characters_local/$c.fch" ]] && cp -a "$base/characters_local/$c.fch" "$dest/local-$c.fch"
+    for ext in db fwl; do [[ -e "$base/worlds_local/$w.$ext" ]] && cp -a "$base/worlds_local/$w.$ext" "$dest/"; done
+  done
+  ls "$(dirname "$dest")" | sort | head -n -5 | while read -r old; do rm -rf "$(dirname "$dest")/$old"; done
+  echo "backed up to $dest: $(ls "$dest" | tr '\n' ' ')"
+}
+
 launch() {
   local world="${1:-${MTB_WORLD:-testboy}}" character="${2:-${MTB_CHARACTER:-Testboy}}"
   local preloader="Z:$HOME/.local/share/com.kesomannen.gale/valheim/profiles/$PROFILE/BepInEx/core/BepInEx.Preloader.dll"
@@ -55,7 +75,7 @@ case "${1:-status}" in
     done
     echo "timed out waiting for a world" >&2; exit 1 ;;
   quit)   req -X POST --data "" "$URL/quit" | json 'print(d)' ;;
-  start)  running && { echo "the game is already running" >&2; exit 1; }; launch "${2:-}" "${3:-}" ;;
+  start)  running && { echo "the game is already running" >&2; exit 1; }; backup "${2:-}" "${3:-}"; launch "${2:-}" "${3:-}" ;;
   restart)
     if running; then
       req -X POST --data "" "$URL/quit" >/dev/null 2>&1 || true
@@ -63,6 +83,7 @@ case "${1:-status}" in
       running && { echo "the game didn't quit within 120 s" >&2; exit 1; }
       sleep 3
     fi
+    backup "${2:-}" "${3:-}"
     launch "${2:-}" "${3:-}"
     end=$((SECONDS + 400))
     while (( SECONDS < end )); do

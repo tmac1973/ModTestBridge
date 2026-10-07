@@ -11,14 +11,13 @@ namespace ModTestBridge
     /// <summary>
     /// Launch options: <c>-mtb-world &lt;name&gt; -mtb-character &lt;name&gt;</c> skip the menus into that single-player world
     /// with that character, the way the menu's own buttons do (so the character really is loaded: no intro, no new
-    /// character at the spawn stones). Before starting it backs up the character and world saves, and it refuses (staying at
+    /// character at the spawn stones). It refuses (staying at
     /// the menu, with the reason in /status and the log) unless the character exists and has been in that world before.
     /// Only on the first visit to the main menu.
     /// </summary>
     [HarmonyPatch]
     internal static class AutoStart
     {
-        private const int KeepBackups = 5;
         private static bool _done;
 
         /// <summary>What the last autostart did (for /status).</summary>
@@ -70,7 +69,6 @@ namespace ModTestBridge
                     Fail($"{characterName} has never been in {worldName}: start it by hand once");
                     yield break;
                 }
-                Backup(profile, world);
                 // The menu's own path: Start with this character (loads it into the game), then this world.
                 menu.OnCharacterStart();
                 menu.m_world = world;
@@ -90,24 +88,6 @@ namespace ModTestBridge
         {
             State = "refused: " + why;
             Debug.LogWarning("ModTestBridge: autostart " + State);
-        }
-
-        // Copies of the character and world saves, newest few kept, in BepInEx/ModTestBridge/backups.
-        private static void Backup(PlayerProfile profile, World world)
-        {
-            string root = Path.Combine(Paths.BepInExRootPath, "ModTestBridge", "backups");
-            string dir = Path.Combine(root, DateTime.Now.ToString("yyyyMMdd-HHmmss"));
-            Directory.CreateDirectory(dir);
-            foreach (string file in new[]
-                     {
-                         SaveSystem.GetCharacterPath(profile.m_fileSource, profile.GetFilename()),
-                         world.GetDBPath(), world.GetMetaPath(),
-                     })
-                if (File.Exists(file))
-                    File.Copy(file, Path.Combine(dir, Path.GetFileName(file)), true);
-            foreach (string old in Directory.GetDirectories(root).OrderByDescending(d => d).Skip(KeepBackups))
-                Directory.Delete(old, true);
-            Debug.Log($"ModTestBridge: backed up {profile.GetName()} and {world.m_name} to {dir}");
         }
     }
 }
