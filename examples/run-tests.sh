@@ -14,8 +14,8 @@ from=$("$MTB" mark)   # where the log is now
 "$MTB" run "example_test $test" "[TEST] done" "${TEST_TIMEOUT:-900}" >/dev/null || { echo "no result (timed out)"; exit 2; }
 
 # Every result line since we started, and the failed checks.
-"$MTB" log "$from" "[TEST] result" | sed 's/.*\[TEST\] result //'
-"$MTB" log "$from" "pass=false" | grep '\[TEST\] check' | sed 's/.*\[TEST\] check /  FAILED /' || true
-summary=$("$MTB" log "$from" "[TEST] done" | tail -1 | sed 's/.*\[TEST\] done //')
+"$MTB" log "$from" "[TEST] result" 2>/dev/null | sed 's/.*\[TEST\] result //'
+"$MTB" log "$from" "pass=false" 2>/dev/null | grep '\[TEST\] check' | sed 's/.*\[TEST\] check /  FAILED /' || true
+summary=$("$MTB" log "$from" "[TEST] done" 2>/dev/null | tail -1 | sed 's/.*\[TEST\] done //')
 echo "$summary"
 [[ "$summary" == *"failed=0"* ]]
