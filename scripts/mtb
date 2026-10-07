@@ -54,11 +54,11 @@ case "${1:-status}" in
       sleep 5
     done
     echo "timed out waiting for a world" >&2; exit 1 ;;
-  quit)   req -X POST "$URL/quit" | json 'print(d)' ;;
+  quit)   req -X POST --data "" "$URL/quit" | json 'print(d)' ;;
   start)  running && { echo "the game is already running" >&2; exit 1; }; launch "${2:-}" "${3:-}" ;;
   restart)
     if running; then
-      req -X POST "$URL/quit" >/dev/null 2>&1 || true
+      req -X POST --data "" "$URL/quit" >/dev/null 2>&1 || true
       end=$((SECONDS + 120)); while running && (( SECONDS < end )); do sleep 2; done
       running && { echo "the game didn't quit within 120 s" >&2; exit 1; }
       sleep 3

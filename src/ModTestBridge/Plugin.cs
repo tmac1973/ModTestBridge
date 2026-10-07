@@ -114,9 +114,11 @@ namespace ModTestBridge
                         Respond(ctx, 401, Json.Obj(("error", "bad or missing X-Token")));
                         continue;
                     }
-                    string body;
-                    using (var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8))
-                        body = reader.ReadToEnd();
+                    // Only read a body that's there: a bodiless POST would otherwise wait for one forever.
+                    string body = "";
+                    if (ctx.Request.HasEntityBody)
+                        using (var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8))
+                            body = reader.ReadToEnd();
                     _queue.Enqueue(new Request { Context = ctx, Path = ctx.Request.Url.AbsolutePath.TrimEnd('/'), Body = body });
                 }
                 catch (Exception e)
