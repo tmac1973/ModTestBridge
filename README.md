@@ -17,6 +17,10 @@ with the token can run console commands.
 - `GET /log?from=N&contains=TEXT`: BepInEx `LogOutput.log` lines from line N, optionally only those containing TEXT, and
   `next` (the line to continue from).
 - `POST /quit`: logs out (saving world and character), then quits the game.
+- **Autostart:** launch options `-mtb-world <name> -mtb-character <name>` skip the menus into that single-player world with
+  that character, through the menu's own Start path (the character really loads: no intro, no new character at the spawn
+  stones). It refuses, staying at the menu with the reason in `/status`'s `autostart`, unless the character exists and has
+  been in that world before.
 
 ## Client
 `scripts/mtb` (bash + curl + python3):
@@ -27,7 +31,11 @@ mtb log 0 "[VFH]"
 mtb wait-log "row=VFH-PASS-1 pass=" 900
 mtb wait-world
 mtb quit
+mtb restart [world] [character]   # save, quit, back up the saves, relaunch into the world, wait for it
 ```
+`mtb restart` / `mtb start` relaunch through Steam the way Gale launches the profile (`MTB_PROFILE`), and back up the
+character and world (Steam Cloud and local saves) to `BepInEx/ModTestBridge/backups` first, keeping the newest 5.
+`MTB_WORLD` / `MTB_CHARACTER` set the defaults (testboy / Testboy).
 `MTB_PROFILE` picks the Gale profile whose token to use (default `vikingsforhire-dev`); `MTB_PORT` the port.
 
 ## Build
