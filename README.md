@@ -51,7 +51,8 @@ the mods it needs. Then either:
 to `BepInEx/config/ModTestBridge.token`.
 
 **4. Get `mtb`.** Clone this repo, or install the Claude Code plugin (below), and put `claude-plugin/bin` on your PATH.
-Then check what it found:
+On Windows that gives you `mtb.cmd`, which works from PowerShell and cmd with nothing else installed (see
+[Platforms](#platforms)). Then check what it found:
 ```
 mtb doctor
 ```
@@ -95,7 +96,7 @@ mtb doctor                          # what mtb found, and whether the game answe
 
 ### Configuring `mtb`
 Settings are read in this order, each overriding the ones before it:
-1. `~/.config/mtb/config`;
+1. `~/.config/mtb/config` (on Windows, `%USERPROFILE%\.config\mtb\config`);
 2. a `.mtb` file in the current directory or the nearest parent directory that has one;
 3. the environment.
 
@@ -108,10 +109,10 @@ Both files are `KEY=value` lines.
 | `MTB_WORLD`, `MTB_CHARACTER` | | For `start`, `restart`, `backup` |
 | `MTB_PORT` | 7811 | Match the plugin's `Port` setting |
 | `MTB_TIMEOUT` | 30 | Seconds for one request |
-| `MTB_LAUNCH` | worked out | The command that launches the profile; `mtb` adds `-console -mtb-world … -mtb-character …` |
+| `MTB_LAUNCH` | worked out | The command that launches the profile; `mtb` adds `-console -mtb-world … -mtb-character …`. A bash command line, or a cmd.exe one for `mtb.cmd` |
 | `MTB_STEAM` | `steam` / `steam.exe` | The Steam executable |
-| `MTB_GAME_PATTERN` | `[v]alheim\.exe` (Proton) or `[v]alheim\.x86_64` | `pgrep -f` pattern for the game process |
-| `MTB_SAVES_DIRS` | worked out | `:`-separated folders holding `characters_local/` and `worlds_local/` |
+| `MTB_GAME_PATTERN` | `[v]alheim\.exe` (Proton) or `[v]alheim\.x86_64` | `pgrep -f` pattern for the game process. For `mtb.cmd`, a regex on the process name (default `^valheim$`) |
+| `MTB_SAVES_DIRS` | worked out | `:`-separated folders holding `characters_local/` and `worlds_local/` (`;`-separated for `mtb.cmd`) |
 | `MTB_CLOUD_DIRS` | `<steam>/userdata/*/892970/remote` | Steam Cloud save folders |
 | `MTB_KEEP_BACKUPS` | 5 | |
 
@@ -121,9 +122,18 @@ Both files are `KEY=value` lines.
 - **Linux, native Valheim:** everything works except launching, because the mod managers' native launch scripts differ
   between versions. Set `MTB_LAUNCH` to the command your mod manager uses. Its "copy launch arguments" option, or its
   log, shows it.
-- **Windows:** the plugin works the same. `mtb` runs in Git Bash, which needs curl and Python. Launching uses
+- **Windows:** the plugin works the same. There are two clients, which take the same commands and settings:
+  - `mtb.cmd`, for PowerShell and cmd. It runs `claude-plugin/windows/mtb.ps1` with PowerShell 7 (`pwsh`) if it's
+    installed, else with the Windows PowerShell that comes with Windows, so it needs nothing else installed. It gets
+    past PowerShell's script execution policy itself.
+    With `claude-plugin/bin` on your PATH, typing `mtb` runs it.
+  - `mtb`, the bash script, for Git Bash. It needs curl and Python. Claude Code on Windows runs its commands in Git
+    Bash, so that's the one Claude uses.
+
+  Launching uses
   `steam.exe -applaunch 892970 --doorstop-enabled true --doorstop-target-assembly <profile>\BepInEx\core\BepInEx.Preloader.dll`,
-  as Gale does. This is untested so far, so reports and fixes are welcome.
+  as Gale does. Steam is found through the registry. This is untested on real Windows so far, so reports and fixes are
+  welcome.
 
 Anything that can send HTTP can use the bridge without `mtb` (see below).
 
@@ -144,6 +154,15 @@ It also asks before taking over the screen.
 ## How it works
 - **Listening.** The plugin listens on `127.0.0.1:<Port>` (default 7811), never on other interfaces. Every request
   needs the header `X-Token: <contents of BepInEx/config/ModTestBridge.token>`.
+- **The token.** You never make or copy it yourself:
+  - The first time the plugin starts with `Enabled = true`, it writes a random token (a GUID, 32 hex characters) to
+    `BepInEx/config/ModTestBridge.token` in the profile. Later starts reuse it.
+  - `mtb` finds the profile and reads the file before every request, and `mtb doctor` says whether it's there.
+  - A request without the right token gets `401 {"error": "bad or missing X-Token"}` and nothing runs.
+  - It is there because 127.0.0.1 keeps out other machines but not other things on yours, such as a web page in your
+    browser. Only something that can read files in your profile can drive the game.
+  - To change it, delete the file and start the game again. You can also put your own value there (at least 16
+    characters).
 - **Threading.** Requests are queued and handled on the game's main thread, up to 8 a frame, so commands run exactly as
   if typed into the console.
 

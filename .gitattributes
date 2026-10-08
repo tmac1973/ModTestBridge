@@ -1,0 +1,5 @@
+# The bash scripts must stay LF even in Windows checkouts (Git Bash chokes on CRLF); cmd wants CRLF.
+claude-plugin/bin/mtb text eol=lf
+*.sh text eol=lf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

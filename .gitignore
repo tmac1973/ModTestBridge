@@ -1,4 +1,5 @@
 bin/
+!claude-plugin/bin/
 obj/
 dist/
 *.user.props
