@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+- `mtb.cmd`, a Windows client for PowerShell and cmd that needs no Git Bash, curl or Python.
+- README: how the token is made and used.
+
 ## 0.1.0
 - First release: a local HTTP bridge (127.0.0.1, token) to run console commands and get their output, read the BepInEx
   log, see the game's state, and quit cleanly.
