@@ -9,10 +9,11 @@
   new) and its own save folder, not listed publicly, and wait until it's up. `mtb server status|cmd|run|log|mark|tail|
   wait-log|wait-world|doctor` do what they do in the game, in the server. Only the server mtb started is ever stopped.
 - `mtb join [character]`: relaunch the game straight onto the test server with the test character (autostart's new
-  `-mtb-server host:port`).
+  `-mtb-server host:port`). If the server turns the game away, autostart says why (`refused: couldn't join the server
+  (ErrorVersion)`) and `mtb join` stops waiting.
 - The example mod has a server-side test (`global_key`); `example_test all` skips tests that need a player of its own on
   a dedicated server.
-- `mtb backup` also finds world saves whose names aren't lower case.
+- `mtb backup` also finds character and world saves whose names aren't lower case.
 
 ## 0.2.1
 - Screenshots: a failure while taking or saving one now answers 500 with the reason, instead of leaving `mtb shot`
