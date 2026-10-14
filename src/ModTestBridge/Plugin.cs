@@ -24,7 +24,7 @@ namespace ModTestBridge
     {
         public const string Guid = "Spronglehump.ModTestBridge";
         public const string Name = "ModTestBridge";
-        public const string Version = "0.2.0";
+        public const string Version = "0.2.1";
 
         private sealed class Request
         {

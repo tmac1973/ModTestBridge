@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.1
 - Screenshots: a failure while taking or saving one now answers 500 with the reason, instead of leaving `mtb shot`
   waiting out its timeout. Overlapping `--day` shots no longer leave the game stuck at noon.
 - README: screenshots in the overview, name and option limits, errors; the Windows client under "What's here".
