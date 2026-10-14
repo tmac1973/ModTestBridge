@@ -203,7 +203,7 @@ namespace ModTestBridge
                     if (shot == null)
                         Respond(r.Context, 400, Json.Obj(("error", error)));
                     else if (Camera.main == null)
-                        Respond(r.Context, 409, Json.Obj(("error", "no camera yet")));
+                        Respond(r.Context, 409, Json.Obj(("error", Screenshot.NoCamera)));
                     else
                         StartCoroutine(Screenshot.Take(r.Context, shot)); // answers when the picture is saved
                     return;

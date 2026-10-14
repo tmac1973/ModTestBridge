@@ -6,6 +6,7 @@ ModTestBridge is a small BepInEx plugin for mod developers. It lets anything on 
 - run console commands in the running game and get back what they printed;
 - read the BepInEx log;
 - see the game's state: menu or in a world, which world, which character, where;
+- take screenshots, of the screen as the player sees it or from a camera placed anywhere in the world;
 - quit cleanly, saving first;
 - relaunch the game straight into a test world with an existing character, skipping the menus.
 
@@ -13,7 +14,7 @@ Together these close the loop for automated testing:
 1. build your mod;
 2. `mtb restart`;
 3. run your mod's test commands;
-4. read the results;
+4. read the results, and look at a screenshot when a log line can't tell you;
 5. fix, and repeat.
 
 Nobody needs to click through menus or copy log lines by hand. It's how
@@ -31,7 +32,8 @@ them. See [Writing tests for your mod](docs/writing-tests.md).
 What's here:
 - **The plugin**, under `src/`. Download it from [Releases](https://github.com/tmac1973/ModTestBridge/releases), or from
   Hexium/Thunderstore as `Spronglehump-ModTestBridge`.
-- **`mtb`**, a command-line client, in `claude-plugin/bin/mtb`. It is bash with curl and python3.
+- **`mtb`**, a command-line client, in `claude-plugin/bin/`: `mtb` is bash with curl and python3 (Linux, Git Bash), and
+  `mtb.cmd` runs the PowerShell port in `claude-plugin/windows/mtb.ps1` (Windows, nothing else needed).
 - **A Claude Code plugin**, the `valheim-mod-testing` skill plus `mtb`, which teaches Claude how to test your mod
   in-game.
 - **An example**, in `examples/`: a tiny mod with tests written the way the bridge expects, and a script that runs them
@@ -90,16 +92,21 @@ mtb doctor                          # what mtb found, and whether the game answe
 ```
 
 **Screenshots.** For what a log line can't tell you: a model, a hat, a panel's layout. `mtb shot [name]` saves
-`<profile>/BepInEx/ModTestBridge/screenshots/<name>.png` (a dated name if you give none) and prints its path, so an agent
-can read the picture. Options:
-- `--size PX`: the longer side, 768 by default. Full-size frames cost an agent many tokens; go bigger only for detail.
+`<profile>/BepInEx/ModTestBridge/screenshots/<name>.png` and prints its path, so an agent can read the picture.
+- The name is letters, digits, `-`, `_` and `.`; a shot with the same name replaces the old one. Without a name you get
+  `shot-<date>-<time>`.
+- `--size PX`: the longer side, 768 by default (64 to 4096). The screen is scaled down to it, never up. Full-size frames
+  cost an agent many tokens; go bigger only for detail.
 - `--at x,y,z --look x,y,z [--fov D]`: a camera of its own, at one point looking at another, in world coordinates
-  (`mtb status` gives the player's position). The player's view is left alone and there's no UI. This camera doesn't
-  draw grass or the game's post-processing, so pictures look flatter than the game does.
+  (`mtb status` gives the player's position). The field of view is 40 degrees by default (5 to 120). The player's view
+  is left alone and there's no UI. This camera doesn't draw grass or the game's post-processing, so pictures look
+  flatter than the game does. In PowerShell, quote the coordinates (`--at "10,32,5"`), since PowerShell reads an unquoted
+  `10,32,5` as a list and may pass it on as three arguments.
 - `--day`: noon for the shot, then the time of day is put back. Night shots are hard to read.
 
-Without `--at`, the picture is the game window, so the game has to be drawing: a minimised window gives a black picture,
-which `mtb shot` reports (exit code 3).
+Without `--at`, the picture is the game window, so the game has to be drawing: a minimised window gives a black picture.
+`mtb shot` still prints the path, but says so and exits with code 3. Before the game has a camera (while it's starting),
+the bridge answers 409 and nothing is saved. `mtb shot` waits up to 60 seconds unless `MTB_TIMEOUT` says otherwise.
 
 **Restart and backups.**
 - `mtb restart` saves and quits the game, then copies the test character and world (local and Steam Cloud saves) to
@@ -161,6 +168,7 @@ Then ask something like "run the tests in game" or "restart the game and check t
 - check the setup with `mtb doctor`;
 - build and deploy, then restart;
 - run your mod's test commands and read the results;
+- look at the game with `mtb shot` when a log can't show the result, such as a model or a panel;
 - leave the game in a good state.
 
 It also asks before taking over the screen.
@@ -185,7 +193,7 @@ It also asks before taking over the screen.
 | `GET /status` | | `state` (`starting`, `menu`, `loading`, `world`), `world`, `character`, `position`, `server`, `fps`, `time`, `autostart`, `bridge` (version) |
 | `POST /command` | body: the command (or `?c=`) | `{"command": "...", "output": [lines the console printed while it ran]}` |
 | `GET /log?from=N&contains=TEXT` | | `{"from": N, "next": M, "lines": [...]}`: lines of `BepInEx/LogOutput.log` from line N (0-based), optionally only those containing TEXT; continue from `next` |
-| `GET /screenshot?name=N&size=PX` | `&at=x,y,z&look=x,y,z&fov=D` for a camera of its own; `&day=1` for noon | `{"file", "relative" (to the profile), "width", "height", "mode" ("screen"/"camera"), "blank"}`: answers once the PNG is saved |
+| `GET /screenshot?name=N&size=PX` | `&at=x,y,z&look=x,y,z&fov=D` for a camera of its own; `&day=1` for noon | `{"file", "relative" (to the profile), "width", "height", "mode" ("screen"/"camera"), "blank"}`: answers once the PNG is saved. 400 with `error` for a bad option, 409 when there's no camera yet |
 | `POST /quit` | | Logs out (which saves the world and character), then quits at the main menu |
 
 - **Commands.** These run with the console's checks skipped, but devcommands still has to be on for cheat commands, as
@@ -207,6 +215,7 @@ Example with curl:
 TOKEN=$(cat ~/.local/share/com.kesomannen.gale/valheim/profiles/mymod-dev/BepInEx/config/ModTestBridge.token)
 curl -s -H "X-Token: $TOKEN" http://127.0.0.1:7811/status
 curl -s -H "X-Token: $TOKEN" --data-binary "pos" http://127.0.0.1:7811/command
+curl -s -H "X-Token: $TOKEN" "http://127.0.0.1:7811/screenshot?name=check&day=1"
 ```
 
 ## Building

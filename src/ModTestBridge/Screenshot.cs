@@ -16,42 +16,50 @@ namespace ModTestBridge
     internal static class Screenshot
     {
         public const string Folder = "ModTestBridge/screenshots";
+        public const string NoCamera = "no camera yet (in the world or at the menu?)";
+
+        // --day shots in progress. They can overlap, so the first saves the time of day and the last puts it back.
+        private static int _dayShots;
+        private static bool _wasDebug;
+        private static float _wasTime;
 
         public static IEnumerator Take(HttpListenerContext ctx, ShotOptions o)
         {
             bool day = o.Day && EnvMan.instance != null;
-            bool wasDebug = day && EnvMan.instance!.m_debugTimeOfDay;
-            float wasTime = day ? EnvMan.instance!.m_debugTime : 0f;
+            if (day)
+                BeginDay();
             Texture2D? image = null;
+            string? error = null;
             try
             {
                 if (day)
-                {
-                    EnvMan.instance!.m_debugTimeOfDay = true;
-                    EnvMan.instance.m_debugTime = 0.5f;
                     for (int i = 0; i < 5; i++)
                         yield return null; // the sun and the light settle
-                }
-                if (o.FromCamera)
-                    image = FromCamera(o);
-                else
-                {
+                if (!o.FromCamera)
                     yield return new WaitForEndOfFrame(); // everything drawn, UI included
-                    image = FromScreen(o);
+                try
+                {
+                    image = o.FromCamera ? FromCamera(o) : FromScreen(o);
+                }
+                catch (Exception e)
+                {
+                    error = e.Message;
                 }
             }
             finally
             {
-                if (day && EnvMan.instance != null)
-                {
-                    EnvMan.instance.m_debugTimeOfDay = wasDebug;
-                    EnvMan.instance.m_debugTime = wasTime;
-                }
+                if (day)
+                    EndDay();
             }
 
+            if (error != null)
+            {
+                Fail(ctx, error);
+                yield break;
+            }
             if (image == null)
             {
-                Plugin.Respond(ctx, 409, Json.Obj(("error", "no camera yet (in the world or at the menu?)")));
+                Plugin.Respond(ctx, 409, Json.Obj(("error", NoCamera)));
                 yield break;
             }
             try
@@ -66,9 +74,40 @@ namespace ModTestBridge
                     ("file", file), ("relative", relative), ("width", image.width), ("height", image.height),
                     ("mode", o.FromCamera ? "camera" : "screen"), ("blank", blank)));
             }
+            catch (Exception e)
+            {
+                Fail(ctx, e.Message);
+            }
             finally
             {
                 UnityEngine.Object.Destroy(image);
+            }
+        }
+
+        // Every request gets an answer, or the client waits out its timeout and learns nothing.
+        private static void Fail(HttpListenerContext ctx, string error)
+        {
+            Plugin.Log($"ModTestBridge screenshot failed: {error}");
+            Plugin.Respond(ctx, 500, Json.Obj(("error", "screenshot failed: " + error)));
+        }
+
+        private static void BeginDay()
+        {
+            if (_dayShots++ == 0)
+            {
+                _wasDebug = EnvMan.instance!.m_debugTimeOfDay;
+                _wasTime = EnvMan.instance.m_debugTime;
+            }
+            EnvMan.instance!.m_debugTimeOfDay = true;
+            EnvMan.instance.m_debugTime = 0.5f;
+        }
+
+        private static void EndDay()
+        {
+            if (--_dayShots == 0 && EnvMan.instance != null)
+            {
+                EnvMan.instance.m_debugTimeOfDay = _wasDebug;
+                EnvMan.instance.m_debugTime = _wasTime;
             }
         }
 
