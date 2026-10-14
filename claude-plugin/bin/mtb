@@ -19,13 +19,23 @@
 #   mtb backup [world] [character]      copy the character and world saves (only while the game isn't running)
 #   mtb profiles                        mod-manager profiles that have ModTestBridge installed
 #   mtb doctor                          show what mtb found (profile, token, launch, saves) and whether the game answers
+#   mtb join [character] [host:port]    quit if running, back up, launch the game onto the test server, wait for it
+#
+# A dedicated test server (headless, on this machine): put "server" first.
+#   mtb server start [world]            back up its world, launch the server (creating the world if new), wait until up
+#   mtb server restart [world]          stop if running, back up, start
+#   mtb server stop                     save and stop it
+#   mtb server backup [world]           copy its world (only while it isn't running)
+#   mtb server status|cmd|run|log|mark|tail|wait-log|wait-world|doctor   as above, in the server
 #
 # Settings come from the environment, else ./.mtb (searched upward from the current directory), else
 # ~/.config/mtb/config (KEY=value lines). See README.md, "Configuring mtb".
 set -euo pipefail
 
 SETTINGS=(MTB_PROFILE MTB_PROFILE_DIR MTB_PORT MTB_WORLD MTB_CHARACTER MTB_TIMEOUT MTB_LAUNCH MTB_STEAM MTB_GAME_PATTERN
-          MTB_SAVES_DIRS MTB_CLOUD_DIRS MTB_KEEP_BACKUPS)
+          MTB_SAVES_DIRS MTB_CLOUD_DIRS MTB_KEEP_BACKUPS
+          MTB_SERVER_DIR MTB_SERVER_PROFILE_DIR MTB_SERVER_PORT MTB_SERVER_WORLD MTB_SERVER_SAVEDIR MTB_SERVER_GAME_PORT
+          MTB_SERVER_PASSWORD MTB_SERVER_ARGS MTB_SERVER_LAUNCH MTB_SERVER_ADDRESS)
 load_settings() {
   local -A keep=() ; local v f d
   for v in "${SETTINGS[@]}"; do [[ -n "${!v+x}" ]] && keep[$v]="${!v}"; done
@@ -36,7 +46,8 @@ load_settings() {
 load_settings
 
 APP=892970
-PORT="${MTB_PORT:-7811}"
+SERVER=0; [[ "${1:-}" == server ]] && { SERVER=1; shift; }   # every command after "server" goes to the test server
+if (( SERVER )); then PORT="${MTB_SERVER_PORT:-7812}"; else PORT="${MTB_PORT:-7811}"; fi
 URL="http://127.0.0.1:$PORT"
 case "${OSTYPE:-}" in msys*|cygwin*) WINDOWS=1 ;; *) WINDOWS=0 ;; esac
 PY="$(command -v python3 || command -v python || true)"
@@ -61,6 +72,7 @@ has_bridge() { compgen -G "$1/BepInEx/plugins/*/ModTestBridge.dll" >/dev/null ||
 bridge_profiles() { local m p; while read -r m; do for p in "$m"/*/; do has_bridge "${p%/}" && echo "${p%/}"; done; done < <(manager_dirs); return 0; }
 
 profile_dir() {
+  if (( SERVER )); then server_profile_dir; return; fi
   if [[ -n "${MTB_PROFILE_DIR:-}" ]]; then echo "$MTB_PROFILE_DIR"; return; fi
   if [[ -n "${MTB_PROFILE:-}" ]]; then
     local m; while read -r m; do [[ -d "$m/$MTB_PROFILE" ]] && { echo "$m/$MTB_PROFILE"; return; }; done < <(manager_dirs)
@@ -92,6 +104,7 @@ proton_prefix() {
 }
 # Folders that hold characters_local/ and worlds_local/ (and, for older saves, characters/ and worlds/).
 saves_dirs() {
+  if (( SERVER )); then server_savedir; return; fi
   if [[ -n "${MTB_SAVES_DIRS:-}" ]]; then tr ':' '\n' <<<"$MTB_SAVES_DIRS"; return; fi
   local pfx; pfx="$(proton_prefix)"
   [[ -n "$pfx" ]] && echo "$pfx/drive_c/users/steamuser/AppData/LocalLow/IronGate/Valheim"
@@ -101,6 +114,7 @@ saves_dirs() {
 }
 # Steam Cloud save folders (userdata/<account>/892970/remote).
 cloud_dirs() {
+  (( SERVER )) && return 0   # the server's world is only ever local
   if [[ -n "${MTB_CLOUD_DIRS:-}" ]]; then tr ':' '\n' <<<"$MTB_CLOUD_DIRS"; return; fi
   local root; root="$(steam_root)"; [[ -n "$root" ]] || return 0
   for d in "$root"/userdata/*/$APP/remote; do [[ -d "$d" ]] && echo "$d"; done; return 0
@@ -111,7 +125,7 @@ token() {
   [[ -n "$TOKEN" ]] && return
   local dir; dir="$(profile_dir)"
   local f="$dir/BepInEx/config/ModTestBridge.token"
-  [[ -f "$f" ]] || { echo "no token at $f: run the game once with ModTestBridge enabled (Enabled = true in BepInEx/config/Spronglehump.ModTestBridge.cfg)" >&2; exit 2; }
+  [[ -f "$f" ]] || { echo "no token at $f: run the $( (( SERVER )) && echo server || echo game) once with ModTestBridge enabled (Enabled = true in BepInEx/config/Spronglehump.ModTestBridge.cfg)" >&2; exit 2; }
   TOKEN="$(tr -d '\r\n' <"$f")"
 }
 req() { token; curl -sS --max-time "${MTB_TIMEOUT:-30}" -H "X-Token: $TOKEN" "$@"; }
@@ -124,6 +138,7 @@ game_pattern() {
   if [[ -n "$(proton_prefix)" ]]; then echo '[v]alheim\.exe'; else echo '[v]alheim\.x86_64'; fi   # never valheim_server
 }
 running() {
+  if (( SERVER )); then server_running; return; fi
   if [[ $WINDOWS == 1 ]]; then tasklist //FI "IMAGENAME eq valheim.exe" 2>/dev/null | grep -qi '^valheim\.exe'; return; fi
   pgrep -f "$(game_pattern)" >/dev/null
 }
@@ -147,6 +162,122 @@ launch() {
   nohup bash -c "$cmd -console -mtb-world $(printf %q "$world") -mtb-character $(printf %q "$character")" >/dev/null 2>&1 &
   echo "launching $(basename "$(profile_dir)") into $world as $character"
 }
+# The game, straight onto a server (Valheim's own -password answers its password prompt).
+launch_join() {
+  local address="$1" character="$2" cmd pw=""
+  cmd="$(launch_cmd)" || { echo "don't know how to launch this setup (native Linux?): set MTB_LAUNCH; see README" >&2; exit 2; }
+  [[ -n "${MTB_SERVER_PASSWORD:-}" ]] && pw=" -password $(printf %q "$MTB_SERVER_PASSWORD")"
+  nohup bash -c "$cmd -console -mtb-server $(printf %q "$address") -mtb-character $(printf %q "$character")$pw" >/dev/null 2>&1 &
+  echo "launching $(basename "$(profile_dir)") onto $address as $character"
+}
+
+# --- the dedicated test server ---------------------------------------------------------------------------------------
+
+# The Valheim Dedicated Server install (Steam's free "Valheim Dedicated Server" tool).
+server_dir() {
+  if [[ -n "${MTB_SERVER_DIR:-}" ]]; then echo "$MTB_SERVER_DIR"; return; fi
+  local l; while read -r l; do
+    [[ -n "$l" && -d "$l/steamapps/common/Valheim dedicated server" ]] && { echo "$l/steamapps/common/Valheim dedicated server"; return; }
+  done < <(steam_libraries | sort -u)
+  echo "no Valheim Dedicated Server found (install it from Steam's Tools, or set MTB_SERVER_DIR)" >&2; return 1
+}
+# The folder holding the server's BepInEx/: the server install itself unless MTB_SERVER_PROFILE_DIR says otherwise.
+server_profile_dir() { if [[ -n "${MTB_SERVER_PROFILE_DIR:-}" ]]; then echo "$MTB_SERVER_PROFILE_DIR"; else server_dir; fi; }
+# Its saves (worlds_local/, adminlist.txt...) stay apart from the game's, so a test world never mixes with real ones.
+server_savedir() { if [[ -n "${MTB_SERVER_SAVEDIR:-}" ]]; then echo "$MTB_SERVER_SAVEDIR"; else echo "$(server_profile_dir)/BepInEx/ModTestBridge/server-saves"; fi; }
+server_state_dir() { echo "$(server_profile_dir)/BepInEx/ModTestBridge"; }
+server_exe() { if [[ $WINDOWS == 1 ]]; then echo "$(server_dir)/valheim_server.exe"; else echo "$(server_dir)/valheim_server.x86_64"; fi; }
+server_pid() { local f; f="$(server_state_dir 2>/dev/null)/server.pid"; [[ -f "$f" ]] && cat "$f"; return 0; }
+# Only the server mtb started (by its pid), never another one running on this machine.
+server_running() {
+  local pid; pid="$(server_pid)"; [[ -n "$pid" ]] || return 1
+  if [[ $WINDOWS == 1 ]]; then tasklist //FI "PID eq $pid" 2>/dev/null | grep -qi 'valheim_server'; return; fi
+  [[ -r "/proc/$pid/cmdline" ]] && tr '\0' ' ' <"/proc/$pid/cmdline" | grep -q 'valheim_server'
+}
+server_enabled() { grep -qiE '^\s*Enabled\s*=\s*true' "$(server_profile_dir)/BepInEx/config/Spronglehump.ModTestBridge.cfg" 2>/dev/null; }
+
+# Everything a start needs, checked before anything is stopped or copied.
+server_check() {
+  local exe prof
+  server_dir >/dev/null || exit 2; exe="$(server_exe)"; prof="$(server_profile_dir)"
+  [[ -f "$exe" ]] || { echo "no server at $exe (set MTB_SERVER_DIR)" >&2; exit 2; }
+  [[ -f "$prof/BepInEx/core/BepInEx.Preloader.dll" ]] || { echo "no BepInEx in $prof: install BepInExPack_Valheim there (see README, \"A dedicated test server\")" >&2; exit 2; }
+  has_bridge "$prof" || { echo "ModTestBridge.dll isn't under $prof/BepInEx/plugins" >&2; exit 2; }
+  server_enabled || { printf 'ModTestBridge is off in the server. Put this in %s:\n[General]\nEnabled = true\n' \
+                        "$prof/BepInEx/config/Spronglehump.ModTestBridge.cfg" >&2; exit 2; }
+  return 0
+}
+
+# Launch the server in the background with BepInEx from the server profile (doorstop, as BepInExPack's
+# start_server_bepinex.sh does), the test world and its own save folder, not listed publicly; output to server.out.
+server_launch() {
+  local world="$1" dir prof saves state exe libs args
+  dir="$(server_dir)"; prof="$(server_profile_dir)"; saves="$(server_savedir)"; state="$(server_state_dir)"; exe="$(server_exe)"
+  mkdir -p "$saves" "$state"
+  args=(-name "mtb $world" -port "${MTB_SERVER_GAME_PORT:-2456}" -world "$world" -savedir "$saves" -public 0)
+  [[ -n "${MTB_SERVER_PASSWORD:-}" ]] && args+=(-password "$MTB_SERVER_PASSWORD")
+  local extra=(); [[ -n "${MTB_SERVER_ARGS:-}" ]] && read -r -a extra <<<"$MTB_SERVER_ARGS"
+  if [[ -n "${MTB_SERVER_LAUNCH:-}" ]]; then
+    ( cd "$dir" || exit 2; nohup bash -c "$MTB_SERVER_LAUNCH $(printf '%q ' "${args[@]}" "${extra[@]}")" >"$state/server.out" 2>&1 & echo $! >"$state/server.pid" )
+  elif [[ $WINDOWS == 1 ]]; then
+    ( cd "$dir" || exit 2; nohup "$exe" --doorstop-enabled true --doorstop-target-assembly "$(cygpath -w "$prof/BepInEx/core/BepInEx.Preloader.dll")" \
+        "${args[@]}" "${extra[@]}" >"$state/server.out" 2>&1 & echo $! >"$state/server.pid" )
+  else
+    libs="$prof/doorstop_libs"; [[ -f "$libs/libdoorstop_x64.so" ]] || libs="$dir/doorstop_libs"
+    [[ -f "$libs/libdoorstop_x64.so" ]] || { echo "no doorstop_libs/libdoorstop_x64.so in $prof or $dir (it comes with BepInExPack_Valheim)" >&2; exit 2; }
+    ( cd "$dir" || exit 2; DOORSTOP_ENABLED=1 DOORSTOP_TARGET_ASSEMBLY="$prof/BepInEx/core/BepInEx.Preloader.dll" \
+        LD_LIBRARY_PATH="$libs:$dir/linux64:${LD_LIBRARY_PATH:-}" LD_PRELOAD="$libs/libdoorstop_x64.so${LD_PRELOAD:+:$LD_PRELOAD}" \
+        SteamAppId=$APP nohup "$exe" "${args[@]}" "${extra[@]}" >"$state/server.out" 2>&1 & echo $! >"$state/server.pid" )
+  fi
+  echo "launching the test server: world $world, port ${MTB_SERVER_GAME_PORT:-2456}, saves in $saves"
+}
+
+# Wait until the server has loaded its world; fail early (with its last output) if it exits.
+wait_server() {
+  local end=$((SECONDS + $1)) st
+  while (( SECONDS < end )); do
+    server_running || { echo "the server stopped; the end of $(server_state_dir)/server.out:" >&2; tail -n 15 "$(server_state_dir)/server.out" >&2; return 1; }
+    st=$(MTB_TIMEOUT=5 req "$URL/status" 2>/dev/null || true)
+    [[ -n "$st" && "$(echo "$st" | json 'print(d["state"])')" == "world" ]] && { echo "$st"; return 0; }
+    sleep 3
+  done
+  echo "timed out waiting for the server" >&2; return 1
+}
+
+server_stop() {
+  running || { echo "the test server isn't running"; return 0; }
+  req -X POST --data "" "$URL/quit" >/dev/null 2>&1 || true
+  local end=$((SECONDS + 90)); while running && (( SECONDS < end )); do sleep 2; done
+  if running; then   # the bridge didn't answer: Ctrl-C, which saves too
+    echo "the server didn't quit through the bridge; interrupting it" >&2
+    [[ $WINDOWS == 1 ]] && taskkill //PID "$(server_pid)" >/dev/null 2>&1 || kill -INT "$(server_pid)" 2>/dev/null || true
+    end=$((SECONDS + 60)); while running && (( SECONDS < end )); do sleep 2; done
+    running && { echo "the server didn't stop within 150 s (pid $(server_pid))" >&2; return 1; }
+  fi
+  rm -f "$(server_state_dir)/server.pid"; echo "test server stopped"
+}
+
+server_world() { WORLD="${1:-${MTB_SERVER_WORLD:-${MTB_WORLD:-}}}"; CHARACTER=""
+  [[ -n "$WORLD" ]] || { echo "which world? pass it, or set MTB_SERVER_WORLD (or MTB_WORLD)" >&2; exit 2; }; }
+
+server_doctor() {
+  local dir prof ok=1
+  if dir="$(server_dir 2>&1)"; then echo "server:     $dir"; else echo "server:     ?? $dir"; ok=0; fi
+  if (( ok )); then
+    prof="$(server_profile_dir)"; echo "profile:    $prof"
+    [[ -f "$prof/BepInEx/core/BepInEx.Preloader.dll" ]] && echo "bepinex:    installed" || echo "bepinex:    ?? no BepInEx/core/BepInEx.Preloader.dll in $prof"
+    has_bridge "$prof" && echo "plugin:     installed" || echo "plugin:     ?? ModTestBridge.dll not under $prof/BepInEx/plugins"
+    server_enabled && echo "enabled:    true" || echo "enabled:    ?? not on (Enabled = true in $prof/BepInEx/config/Spronglehump.ModTestBridge.cfg)"
+    [[ -f "$prof/BepInEx/config/ModTestBridge.token" ]] && echo "token:      found" || echo "token:      (none yet: written on the first start)"
+    grep -qiE '^\s*WriteUnityLog\s*=\s*true' "$prof/BepInEx/config/BepInEx.cfg" 2>/dev/null && echo "unity log:  in LogOutput.log" \
+      || echo "unity log:  ?? not in LogOutput.log: the game's own lines and Debug.Log are missing (WriteUnityLog = true in BepInEx.cfg)"
+    echo "saves:      $(server_savedir)"
+  fi
+  echo "world:      ${MTB_SERVER_WORLD:-${MTB_WORLD:-(unset: MTB_SERVER_WORLD)}}   game port: ${MTB_SERVER_GAME_PORT:-2456}   bridge port: $PORT"
+  echo "password:   $([[ -n "${MTB_SERVER_PASSWORD:-}" ]] && echo set || echo 'none (not listed publicly; anyone on your network could join)')"
+  echo "running:    $(running && echo "yes (pid $(server_pid))" || echo no)"
+  (( ok )) && echo "bridge:     $(MTB_TIMEOUT=5 req "$URL/status" 2>&1 || true)"
+}
 
 need_names() {
   WORLD="${1:-${MTB_WORLD:-}}"; CHARACTER="${2:-${MTB_CHARACTER:-}}"
@@ -155,26 +286,28 @@ need_names() {
 
 # Copies of the character and world (local and Steam Cloud saves), taken while the game isn't running; newest N kept.
 backup() {
-  running && { echo "not backing up while the game is running (saves may be half-written)" >&2; return 1; }
+  running && { echo "not backing up while the $( (( SERVER )) && echo server || echo game) is running (saves may be half-written)" >&2; return 1; }
   local c w root dest d n=0
   c="$(lower "$CHARACTER")"; w="$(lower "$WORLD")"
   root="$(profile_dir)/BepInEx/ModTestBridge/backups"; dest="$root/$(date +%Y%m%d-%H%M%S)"
   mkdir -p "$dest"
   while read -r d; do
     [[ -n "$d" ]] || continue
-    for sub in characters_local characters; do [[ -e "$d/$sub/$c.fch" ]] && cp -a "$d/$sub/$c.fch" "$dest/$sub-$c.fch" && n=$((n+1)); done
-    for sub in worlds_local worlds; do
-      [[ -d "$d/$sub/$w" ]] && cp -a "$d/$sub/$w" "$dest/$sub-$w" && n=$((n+1))   # chunked world (current format)
-      for ext in db fwl; do [[ -e "$d/$sub/$w.$ext" ]] && cp -a "$d/$sub/$w.$ext" "$dest/$sub-$w.$ext" && n=$((n+1)); done
+    [[ -n "$c" ]] && for sub in characters_local characters; do [[ -e "$d/$sub/$c.fch" ]] && cp -a "$d/$sub/$c.fch" "$dest/$sub-$c.fch" && n=$((n+1)); done
+    [[ -n "$w" ]] && for sub in worlds_local worlds; do
+      for name in "$WORLD" "$w"; do   # as typed (a server keeps the case), or lower case
+        [[ -d "$d/$sub/$name" && ! -e "$dest/$sub-$name" ]] && cp -a "$d/$sub/$name" "$dest/$sub-$name" && n=$((n+1))   # chunked world (current format)
+        for ext in db fwl; do [[ -e "$d/$sub/$name.$ext" && ! -e "$dest/$sub-$name.$ext" ]] && cp -a "$d/$sub/$name.$ext" "$dest/$sub-$name.$ext" && n=$((n+1)); done
+      done
     done
   done < <(saves_dirs)
   while read -r d; do
     [[ -n "$d" ]] || continue
     [[ -e "$d/characters/$c.fch" ]] && cp -a "$d/characters/$c.fch" "$dest/cloud-$c.fch" && n=$((n+1))
-    [[ -e "$d/worlds/$w" ]] && cp -a "$d/worlds/$w" "$dest/cloud-world-$w" && n=$((n+1))
+    [[ -n "$w" && -e "$d/worlds/$w" ]] && cp -a "$d/worlds/$w" "$dest/cloud-world-$w" && n=$((n+1))
   done < <(cloud_dirs)
   ls "$root" | sort | head -n "-${MTB_KEEP_BACKUPS:-5}" | while read -r old; do rm -rf "${root:?}/$old"; done
-  if (( n == 0 )); then echo "warning: found no saves for $CHARACTER / $WORLD to back up (see mtb doctor)" >&2; rmdir "$dest"
+  if (( n == 0 )); then echo "warning: found no saves for ${CHARACTER:-}${CHARACTER:+ / }${WORLD:-} to back up (see mtb doctor)" >&2; rmdir "$dest"
   else echo "backed up to $dest: $(ls "$dest" | tr '\n' ' ')"; fi
 }
 
@@ -244,6 +377,22 @@ doctor() {
   (( ok )) && echo "bridge:     $(MTB_TIMEOUT=5 req "$URL/status" 2>&1 || true)"
 }
 
+usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
+
+if (( SERVER )); then
+  case "${1:-status}" in
+    start)   server_world "${2:-}"; running && { echo "the test server is already running (use mtb server restart)" >&2; exit 1; }
+             server_check; backup || true; server_launch "$WORLD"; wait_server 600; exit ;;
+    restart) server_world "${2:-}"; server_check; server_stop; backup || true; server_launch "$WORLD"; wait_server 600; exit ;;
+    stop|quit) server_stop; exit ;;
+    backup)  server_world "${2:-}"; backup; exit ;;
+    doctor)  server_doctor; exit ;;
+    shot)    echo "a dedicated server has no screen: take screenshots in the game (mtb shot)" >&2; exit 2 ;;
+    status|cmd|run|log|tail|mark|wait-log|wait-world) ;;   # the same as in the game, below
+    *)       usage; exit 2 ;;
+  esac
+fi
+
 case "${1:-status}" in
   status) req "$URL/status" | json 'print(json.dumps(d))' ;;
   cmd)    shift; req -X POST --data-binary "$*" "$URL/command" | json 'print("\n".join(d.get("output") or [])) if "output" in d else print(d)' ;;
@@ -260,7 +409,7 @@ case "${1:-status}" in
     else req "$URL/log?from=$(( next > n ? next - n : 0 ))" | json 'print("\n".join(d["lines"]))'; fi ;;
   mark)   log_next ;;
   wait-log) [[ $# -ge 2 ]] || { echo 'usage: mtb wait-log "<text>" [timeout]' >&2; exit 2; }; wait_log "$2" "${3:-600}" "$(log_next)" ;;
-  wait-world) wait_in_world "${2:-300}" ;;
+  wait-world) if (( SERVER )); then wait_server "${2:-300}"; else wait_in_world "${2:-300}"; fi ;;
   quit)   req -X POST --data "" "$URL/quit" | json 'print(d)' ;;
   start)  need_names "${2:-}" "${3:-}"; running && { echo "the game is already running (use mtb restart)" >&2; exit 1; }
           backup || true; launch "$WORLD" "$CHARACTER" ;;
@@ -276,9 +425,26 @@ case "${1:-status}" in
     launch "$WORLD" "$CHARACTER"
     wait_in_world 400 ;;
   backup)   need_names "${2:-}" "${3:-}"; backup ;;
+  join)
+    CHARACTER="${2:-${MTB_CHARACTER:-}}"; WORLD=""
+    [[ -n "$CHARACTER" ]] || { echo "which character? pass it, or set MTB_CHARACTER" >&2; exit 2; }
+    address="${3:-${MTB_SERVER_ADDRESS:-127.0.0.1:${MTB_SERVER_GAME_PORT:-2456}}}"
+    if [[ -z "${3:-}${MTB_SERVER_ADDRESS:-}" ]]; then   # the local test server: is it up?
+      [[ "$(SERVER=1 MTB_TIMEOUT=5 "$0" server status 2>/dev/null | json 'print(d["state"])' 2>/dev/null)" == world ]] \
+        || { echo "the test server isn't up: mtb server start" >&2; exit 1; }
+    fi
+    if running; then
+      req -X POST --data "" "$URL/quit" >/dev/null 2>&1 || true
+      end=$((SECONDS + 120)); while running && (( SECONDS < end )); do sleep 2; done
+      running && { echo "the game didn't quit within 120 s" >&2; exit 1; }
+      sleep 3
+    fi
+    backup || true
+    launch_join "$address" "$CHARACTER"
+    wait_in_world 400 ;;
   profiles) bridge_profiles ;;
   doctor)   doctor ;;
   shot)   shift; shot "$@" ;;
-  help|-h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//' ;;
-  *)      sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  help|-h|--help) usage ;;
+  *)      usage; exit 2 ;;
 esac

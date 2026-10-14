@@ -1,6 +1,6 @@
 {
   "name": "modtestbridge",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Test Valheim mods in-game: build, restart straight into a test world, run the mod's test commands and read the results through ModTestBridge.",
   "author": {
     "name": "Tim MacDonald",

@@ -10,7 +10,8 @@ namespace ExampleTests
     /// <summary>
     /// The pattern ModTestBridge is built for: a mod's tests are console commands that set up a scene in the live game,
     /// wait for things to happen, check the result, clean up, and write one easy-to-find log line per test. A script or
-    /// an agent then runs <c>mtb run "example_test all" "[TEST] done"</c> and reads the result lines.
+    /// an agent then runs <c>mtb run "example_test all" "[TEST] done"</c> and reads the result lines. The same commands run
+    /// in a dedicated test server (<c>mtb server run ...</c>), where tests that need a player of its own are skipped.
     ///
     ///   example_test list          the tests
     ///   example_test &lt;name&gt;       one test
@@ -22,11 +23,15 @@ namespace ExampleTests
         private delegate IEnumerator Test(Checks checks);
 
         // Name -> test. A test is a coroutine: it can wait (yield) for the game to move on before checking.
-        private static readonly Dictionary<string, Test> Tests = new()
+        // NeedsPlayer: it works around the local player, so a dedicated server (which has none) skips it.
+        private static readonly Dictionary<string, (Test Run, bool NeedsPlayer)> Tests = new()
         {
-            ["wood_drops"] = WoodDrops,
-            ["player_alive"] = PlayerAlive,
+            ["wood_drops"] = (WoodDrops, true),
+            ["player_alive"] = (PlayerAlive, true),
+            ["global_key"] = (GlobalKey, false),
         };
+
+        private static bool Dedicated => ZNet.instance != null && ZNet.instance.IsDedicated();
 
         private static ExampleTestsPlugin? _instance;
         private bool _running;
@@ -47,7 +52,9 @@ namespace ExampleTests
                     args.Context.AddString("tests are already running");
                     return;
                 }
-                List<string> names = which == "all" ? Tests.Keys.ToList() : new List<string> { which };
+                List<string> names = which == "all"
+                    ? Tests.Where(t => !(Dedicated && t.Value.NeedsPlayer)).Select(t => t.Key).ToList()
+                    : new List<string> { which };
                 if (names.Any(n => !Tests.ContainsKey(n)))
                 {
                     args.Context.AddString($"no test named {which}");
@@ -66,7 +73,7 @@ namespace ExampleTests
             {
                 var checks = new Checks(name);
                 // One test throwing must not stop the rest, so step the coroutine by hand.
-                IEnumerator test = Tests[name](checks);
+                IEnumerator test = Tests[name].Run(checks);
                 while (true)
                 {
                     object? current;
@@ -135,6 +142,26 @@ namespace ExampleTests
             foreach (GameObject go in spawned)
                 if (go != null)
                     ZNetScene.instance.Destroy(go);   // tests clean up after themselves
+        }
+
+        // Server state: global keys belong to the server, which shares them with every player. This one runs anywhere
+        // the world is hosted: single-player (the game hosts it) or a dedicated server.
+        private static IEnumerator GlobalKey(Checks checks)
+        {
+            checks.That("hosting the world", ZNet.instance != null && ZNet.instance.IsServer());
+            if (ZoneSystem.instance == null)
+                yield break;
+            const string key = "example_test_key";
+            ZoneSystem.instance.SetGlobalKey(key);   // a routed RPC: it lands a moment later, so wait for it
+            float deadline = Time.time + 5f;
+            while (!ZoneSystem.instance.GetGlobalKey(key) && Time.time < deadline)
+                yield return new WaitForSeconds(0.25f);
+            checks.That("the key is set", ZoneSystem.instance.GetGlobalKey(key));
+            ZoneSystem.instance.RemoveGlobalKey(key);   // clean up
+            deadline = Time.time + 5f;
+            while (ZoneSystem.instance.GetGlobalKey(key) && Time.time < deadline)
+                yield return new WaitForSeconds(0.25f);
+            checks.That("the key is gone again", !ZoneSystem.instance.GetGlobalKey(key));
         }
 
         private static IEnumerator PlayerAlive(Checks checks)

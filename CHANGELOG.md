@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.0
+- A dedicated test server: the plugin also runs in `valheim_server`, where it listens on port 7812 (the game keeps 7811,
+  so both run side by side). Console commands, the log and `/status` work there: `state` is `world` once the server's
+  world is loaded, and `/status` has `dedicated` and the connected `players` with their positions. `/quit` saves the
+  world and stops the server.
+- `mtb server start|restart|stop|backup [world]`: launch a headless server with BepInEx, a test world (created when it's
+  new) and its own save folder, not listed publicly, and wait until it's up. `mtb server status|cmd|run|log|mark|tail|
+  wait-log|wait-world|doctor` do what they do in the game, in the server. Only the server mtb started is ever stopped.
+- `mtb join [character]`: relaunch the game straight onto the test server with the test character (autostart's new
+  `-mtb-server host:port`).
+- The example mod has a server-side test (`global_key`); `example_test all` skips tests that need a player of its own on
+  a dedicated server.
+- `mtb backup` also finds world saves whose names aren't lower case.
+
 ## 0.2.1
 - Screenshots: a failure while taking or saving one now answers 500 with the reason, instead of leaving `mtb shot`
   waiting out its timeout. Overlapping `--day` shots no longer leave the game stuck at noon.

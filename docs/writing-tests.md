@@ -67,6 +67,19 @@ Get `<mark>` from `mtb mark` before starting.
 - **Restart only when the code changed.** Config and data changes can often be reloaded live. Have a reload command if
   your mod supports it, because a restart costs about 40 seconds.
 
+## Tests for a dedicated server
+A server-side test is a console command too, run in the server with `mtb server run "mymod_test all" "[TEST] done"`.
+The server is a different place to test in:
+- **There's no local player.** `Player.m_localPlayer` is null. Work on what the server owns instead: ZDOs, global keys,
+  the zone system, the connected peers (`ZNet.instance.GetPeers()`). `global_key` in the example is one.
+- **Mark tests that need a player,** and skip them on a dedicated server (`ZNet.instance.IsDedicated()`), so the same
+  `mymod_test all` works on both sides. The example's `NeedsPlayer` flag does this.
+- **For something that crosses the network,** join with `mtb join`, then split the test: set up with a command in the
+  server, act with a command in the game, and check on the side that should see the result. Each side logs its own
+  lines, so take a mark on both: `mtb mark` and `mtb server mark`.
+- **Wait for replication.** Changes travel through RPCs and ZDO syncs, so a check written as "becomes true within N
+  seconds" matters even more than in single-player.
+
 ## A loop for an agent
 This is what the Claude Code skill in this repo teaches:
 1. **Build and deploy** the mod into the dev profile.
