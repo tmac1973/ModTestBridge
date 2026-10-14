@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 (not released yet)
+## 0.2.0
 - Screenshots: `mtb shot [name]` saves what the player sees (UI included), or with `--at x,y,z --look x,y,z` a picture
   from a camera of its own; `--size` (768 by default), `--fov`, `--day` (noon for the shot). Prints the PNG's path and
   says when the picture came out black (a minimised window). New endpoint `GET /screenshot`.
