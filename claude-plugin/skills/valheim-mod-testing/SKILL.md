@@ -95,7 +95,9 @@ to players, anything that crosses the network. Put `server` first and the comman
 | `mtb server stop` | Save its world and stop it |
 | `mtb join` | Relaunch the game straight onto the test server as `MTB_CHARACTER`, wait until in the world |
 
-- **Deploy to both** when the mod runs on both sides: the game's profile and the server's `BepInEx/plugins`. A new
+- **Deploy to both** when the mod runs on both sides: the game's profile and the server's `BepInEx/plugins`. The server
+  needs the game's mods too: if `mtb join` says `couldn't join the server (ErrorVersion)`, the game's log
+  (`mtb tail 200 Jotunn`) names the mods the server is missing. A new
   build needs `mtb server restart`, and `mtb join` (which restarts the game) if the game's copy changed too.
 - **The server has no player of its own.** Commands that act on "the player" (`spawn`, `pos`, `god`) do nothing useful
   there. Server tests work on world state (ZDOs, global keys, the connected peers in `mtb server status`) or on

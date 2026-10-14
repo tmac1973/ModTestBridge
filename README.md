@@ -231,6 +231,9 @@ server, act in the game, check in either.
 launches the game straight onto the server (`127.0.0.1:2456` by default) and waits until the character is in the world.
 Unlike `mtb restart`, the character doesn't need to have been there before. `mtb restart` goes back to the single-player
 test world.
+- **Give the server the game's mods.** Mods built on Jötunn refuse to join a server that lacks them, and the server
+  turns the game away with `ErrorVersion`. `mtb join` then stops with `autostart refused: couldn't join the server
+  (ErrorVersion)`, and the game's log says which mods are missing.
 
 ## Using it with Claude Code
 Install the plugin. It adds the `valheim-mod-testing` skill and puts `mtb` on Claude's PATH:

@@ -20,6 +20,7 @@ namespace ModTestBridge
     internal static class AutoStart
     {
         private static bool _done;
+        private static bool _joining;
 
         /// <summary>What the last autostart did (for /status).</summary>
         public static string State { get; private set; } = "off";
@@ -35,6 +36,13 @@ namespace ModTestBridge
         [HarmonyPatch(typeof(FejdStartup), nameof(FejdStartup.Start))]
         private static void OnMenu(FejdStartup __instance)
         {
+            if (_joining)
+            {
+                // Back at the menu after a join: the server turned us away, or the connection dropped.
+                _joining = false;
+                ZNet.ConnectionStatus status = ZNet.GetConnectionStatus();
+                Fail($"couldn't join the server ({status}); the game's log says why");
+            }
             if (_done)
                 return;
             _done = true;
@@ -43,6 +51,17 @@ namespace ModTestBridge
                 return;
             State = "pending";
             __instance.StartCoroutine(server != null ? Join(__instance, server, character) : Run(__instance, world!, character));
+        }
+
+        // In the world: the join worked. (Not when the main scene loads: a server can still turn us away after that.)
+        [HarmonyPostfix]
+        [HarmonyPatch(typeof(Player), nameof(Player.SetLocalPlayer))]
+        private static void OnLocalPlayer()
+        {
+            if (!_joining)
+                return;
+            _joining = false;
+            State = State.Replace("joining", "joined");
         }
 
         private static PlayerProfile? FindProfile(string characterName) =>
@@ -70,6 +89,7 @@ namespace ModTestBridge
                 menu.SetSelectedProfile(profile.GetFilename());
                 menu.m_queuedJoinServer = new ServerJoinData(join);
                 State = $"joining {server} as {profile.GetName()}";
+                _joining = true;
                 Debug.Log($"ModTestBridge: autostart {State}");
                 menu.OnCharacterStart();
             }

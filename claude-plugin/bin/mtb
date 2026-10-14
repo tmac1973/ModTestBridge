@@ -293,7 +293,11 @@ backup() {
   mkdir -p "$dest"
   while read -r d; do
     [[ -n "$d" ]] || continue
-    [[ -n "$c" ]] && for sub in characters_local characters; do [[ -e "$d/$sub/$c.fch" ]] && cp -a "$d/$sub/$c.fch" "$dest/$sub-$c.fch" && n=$((n+1)); done
+    [[ -n "$c" ]] && for sub in characters_local characters; do
+      for name in "$CHARACTER" "$c"; do   # as typed, or lower case (the game's own)
+        [[ -e "$d/$sub/$name.fch" && ! -e "$dest/$sub-$name.fch" ]] && cp -a "$d/$sub/$name.fch" "$dest/$sub-$name.fch" && n=$((n+1))
+      done
+    done
     [[ -n "$w" ]] && for sub in worlds_local worlds; do
       for name in "$WORLD" "$w"; do   # as typed (a server keeps the case), or lower case
         [[ -d "$d/$sub/$name" && ! -e "$dest/$sub-$name" ]] && cp -a "$d/$sub/$name" "$dest/$sub-$name" && n=$((n+1))   # chunked world (current format)
@@ -307,7 +311,7 @@ backup() {
     [[ -n "$w" && -e "$d/worlds/$w" ]] && cp -a "$d/worlds/$w" "$dest/cloud-world-$w" && n=$((n+1))
   done < <(cloud_dirs)
   ls "$root" | sort | head -n "-${MTB_KEEP_BACKUPS:-5}" | while read -r old; do rm -rf "${root:?}/$old"; done
-  if (( n == 0 )); then echo "warning: found no saves for ${CHARACTER:-}${CHARACTER:+ / }${WORLD:-} to back up (see mtb doctor)" >&2; rmdir "$dest"
+  if (( n == 0 )); then echo "warning: found no saves for $(echo "${CHARACTER:-} / ${WORLD:-}" | sed 's#^ / ##; s# / $##') to back up (see mtb doctor)" >&2; rmdir "$dest"
   else echo "backed up to $dest: $(ls "$dest" | tr '\n' ' ')"; fi
 }
 
