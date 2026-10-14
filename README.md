@@ -8,7 +8,8 @@ ModTestBridge is a small BepInEx plugin for mod developers. It lets anything on 
 - see the game's state: menu or in a world, which world, which character, where;
 - take screenshots, of the screen as the player sees it or from a camera placed anywhere in the world;
 - quit cleanly, saving first;
-- relaunch the game straight into a test world with an existing character, skipping the menus.
+- relaunch the game straight into a test world with an existing character, skipping the menus;
+- run a headless dedicated server for testing, drive it the same way, and join it from the game.
 
 Together these close the loop for automated testing:
 1. build your mod;
@@ -25,9 +26,9 @@ It works with any mod, because it doesn't know about yours. Your mod keeps its o
 them. See [Writing tests for your mod](docs/writing-tests.md).
 
 > [!WARNING]
-> **Development profiles only.** Never install it on a server or on a profile you play on. Anything on your computer
-> that can reach the port with the token can run console commands. It only listens on 127.0.0.1, and it is **off until
-> you turn it on**.
+> **Development profiles only.** Never install it on a server people play on or on a profile you play on: only on
+> a test server of your own. Anything on your computer that can reach the port with the token can run console commands.
+> It only listens on 127.0.0.1, and it is **off until you turn it on**.
 
 What's here:
 - **The plugin**, under `src/`. Download it from [Releases](https://github.com/tmac1973/ModTestBridge/releases), or from
@@ -89,6 +90,8 @@ mtb start [world] [character]       # the same, when the game isn't running
 mtb backup                          # back up the test character and world now (game not running)
 mtb profiles                        # mod-manager profiles with ModTestBridge installed
 mtb doctor                          # what mtb found, and whether the game answers
+mtb join [character] [host:port]    # relaunch straight onto a server (see "A dedicated test server")
+mtb server ...                      # the same for a dedicated test server (see below)
 ```
 
 **Screenshots.** For what a log line can't tell you: a model, a hat, a panel's layout. `mtb shot [name]` saves
@@ -136,6 +139,16 @@ Both files are `KEY=value` lines.
 | `MTB_SAVES_DIRS` | worked out | `:`-separated folders holding `characters_local/` and `worlds_local/` (`;`-separated for `mtb.cmd`) |
 | `MTB_CLOUD_DIRS` | `<steam>/userdata/*/892970/remote` | Steam Cloud save folders |
 | `MTB_KEEP_BACKUPS` | 5 | |
+| `MTB_SERVER_DIR` | found in your Steam libraries | The Valheim Dedicated Server install |
+| `MTB_SERVER_PROFILE_DIR` | `MTB_SERVER_DIR` | The folder holding the server's `BepInEx/` |
+| `MTB_SERVER_WORLD` | `MTB_WORLD` | The server's world, made if it doesn't exist yet |
+| `MTB_SERVER_SAVEDIR` | `<server profile>/BepInEx/ModTestBridge/server-saves` | The server's `-savedir` |
+| `MTB_SERVER_PORT` | 7812 | Match the server's `Port` setting |
+| `MTB_SERVER_GAME_PORT` | 2456 | The port players join on |
+| `MTB_SERVER_PASSWORD` | none | The server's password, which `mtb join` passes to the game |
+| `MTB_SERVER_ARGS` | | More server options, split at spaces, such as `-preset hard` or `-modifier raids none` |
+| `MTB_SERVER_LAUNCH` | worked out | The command that starts the server, run in its folder; `mtb` adds `-name … -port … -world … -savedir … -public 0` |
+| `MTB_SERVER_ADDRESS` | `127.0.0.1:<MTB_SERVER_GAME_PORT>` | Where `mtb join` goes |
 
 ### Platforms
 - **Linux, Valheim under Proton:** the way Gale and r2modman run modded Valheim. This is the tested setup, and
@@ -158,6 +171,67 @@ Both files are `KEY=value` lines.
 
 Anything that can send HTTP can use the bridge without `mtb` (see below).
 
+## A dedicated test server
+For what only happens on a server: server-side patches, config sync, what one player sees of another's actions. `mtb`
+runs a headless Valheim Dedicated Server on your machine, with your mod and the bridge in it, and drives it the same
+way it drives the game. Put `server` first:
+```
+mtb server start                    # launch it with MTB_SERVER_WORLD (made the first time), wait until it's up
+mtb server cmd "mymod_status"       # a console command in the server
+mtb server run "mymod_test server" "[TEST] done" 300
+mtb server tail 40                  # the server's BepInEx log
+mtb server status                   # {"state":"world","dedicated":true,"players":[{"name":"Tester","position":[...]}],...}
+mtb join                            # relaunch the game straight onto the test server as MTB_CHARACTER
+mtb server restart                  # after deploying a new build of your mod to the server
+mtb server stop                     # save its world and stop it
+```
+The game and the server each have their own bridge, log and token, so `mtb cmd ...` still talks to the game and
+`mtb server cmd ...` to the server. A test of something that crosses the network does its part in each: set up in the
+server, act in the game, check in either.
+
+**Setting it up.**
+1. **Install the server.** In Steam, under Library > Tools, install *Valheim Dedicated Server* (free). `mtb` finds it in
+   your Steam libraries, or set `MTB_SERVER_DIR`.
+2. **Give it BepInEx.** Unzip [BepInExPack_Valheim](https://thunderstore.io/c/valheim/p/denikson/BepInExPack_Valheim/)
+   into the server's folder, the one with `valheim_server` in it. Or, to keep the server install clean, unzip it into a
+   folder of its own and set `MTB_SERVER_PROFILE_DIR` to it: `mtb` starts the server with BepInEx from there.
+3. **Add the plugins.** Put `ModTestBridge.dll`, your mod and the mods it needs under that folder's `BepInEx/plugins/`.
+   Your mod's build can deploy there too.
+4. **Turn the bridge on.** Write `BepInEx/config/Spronglehump.ModTestBridge.cfg` there, with these two lines:
+   ```
+   [General]
+   Enabled = true
+   ```
+5. **Name the world** in `.mtb`, with `MTB_SERVER_WORLD=servertest`, then check with `mtb server doctor` and start it.
+
+**What `mtb server start` does.**
+- It launches `valheim_server` in the background with BepInEx loaded, its output in
+  `<server profile>/BepInEx/ModTestBridge/server.out`.
+- It uses the test world, made the first time, and the server's own save folder,
+  `<server profile>/BepInEx/ModTestBridge/server-saves`, so test worlds never mix with your real ones.
+- The server isn't listed publicly (`-public 0`). Without `MTB_SERVER_PASSWORD` it has no password, which a server that
+  isn't public allows, so anyone on your network could join it while it runs. Set a password if that matters; `mtb join`
+  passes it to the game.
+- It backs up the world first, keeping the newest 5, and waits until the world is loaded.
+- On Linux it starts the server as BepInExPack's `start_server_bepinex.sh` does; this is the tested setup. On Windows it
+  starts `valheim_server.exe` with doorstop's `--doorstop-target-assembly` option, which is untested so far.
+- `mtb server stop` and `restart` save the world, through the bridge, and only ever stop the server that `mtb` started.
+  Other servers on the machine are left alone.
+
+**Inside the server.**
+- Commands run in the server's console, as the server. Those that act on "the player", like `spawn` or `pos`, have no
+  player to act on there.
+- The server's bridge listens on port 7812, so the game (7811) and the server can run together. Each takes the port
+  from its own config.
+- Screenshots need the game: a server has no screen.
+- With BepInExPack's config, the game's own log lines and `Debug.Log` are in `LogOutput.log` too. `mtb server doctor`
+  warns if `WriteUnityLog` is off.
+
+**Joining it.** `mtb join [character] [host:port]` quits the game if it's running, backs up the character, then
+launches the game straight onto the server (`127.0.0.1:2456` by default) and waits until the character is in the world.
+Unlike `mtb restart`, the character doesn't need to have been there before. `mtb restart` goes back to the single-player
+test world.
+
 ## Using it with Claude Code
 Install the plugin. It adds the `valheim-mod-testing` skill and puts `mtb` on Claude's PATH:
 ```
@@ -174,7 +248,8 @@ Then ask something like "run the tests in game" or "restart the game and check t
 It also asks before taking over the screen.
 
 ## How it works
-- **Listening.** The plugin listens on `127.0.0.1:<Port>` (default 7811), never on other interfaces. Every request
+- **Listening.** The plugin listens on `127.0.0.1:<Port>` (default 7811 in the game, 7812 in a dedicated server), never
+  on other interfaces. Every request
   needs the header `X-Token: <contents of BepInEx/config/ModTestBridge.token>`.
 - **The token.** You never make or copy it yourself:
   - The first time the plugin starts with `Enabled = true`, it writes a random token (a GUID, 32 hex characters) to
@@ -190,11 +265,11 @@ It also asks before taking over the screen.
 
 | Endpoint | | Returns |
 |---|---|---|
-| `GET /status` | | `state` (`starting`, `menu`, `loading`, `world`), `world`, `character`, `position`, `server`, `fps`, `time`, `autostart`, `bridge` (version) |
+| `GET /status` | | `state` (`starting`, `menu`, `loading`, `world`), `world`, `character`, `position`, `server` (hosting the world), `dedicated`, `players` (when hosting: the others connected, with `name` and `position`), `fps`, `time`, `autostart`, `bridge` (version) |
 | `POST /command` | body: the command (or `?c=`) | `{"command": "...", "output": [lines the console printed while it ran]}` |
 | `GET /log?from=N&contains=TEXT` | | `{"from": N, "next": M, "lines": [...]}`: lines of `BepInEx/LogOutput.log` from line N (0-based), optionally only those containing TEXT; continue from `next` |
 | `GET /screenshot?name=N&size=PX` | `&at=x,y,z&look=x,y,z&fov=D` for a camera of its own; `&day=1` for noon | `{"file", "relative" (to the profile), "width", "height", "mode" ("screen"/"camera"), "blank"}`: answers once the PNG is saved. 400 with `error` for a bad option, 409 when there's no camera yet |
-| `POST /quit` | | Logs out (which saves the world and character), then quits at the main menu |
+| `POST /quit` | | Logs out (which saves the world and character), then quits at the main menu. A dedicated server saves its world and stops |
 
 - **Commands.** These run with the console's checks skipped, but devcommands still has to be on for cheat commands, as
   in the console. Run `devcommands` once if your tests need them.
@@ -209,6 +284,9 @@ It also asks before taking over the screen.
   The character is really loaded: no intro, and no new character at the spawn stones. Autostart refuses, staying at the
   menu with the reason in `/status`'s `autostart` and in the log, unless the character exists and has been in that
   world before.
+
+  With `-mtb-server <host:port>` in place of `-mtb-world`, it joins that server with the character instead. Valheim's
+  own `-password <password>` answers the server's password prompt.
 
 Example with curl:
 ```

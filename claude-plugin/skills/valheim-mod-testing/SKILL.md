@@ -1,6 +1,6 @@
 ---
 name: valheim-mod-testing
-description: Test a Valheim (BepInEx) mod in the running game through ModTestBridge and the mtb command. Use this when asked to run a mod's in-game tests, check a fix in game, restart Valheim into the test world, run console commands in Valheim, or read the game's BepInEx log, and also when setting up ModTestBridge or writing in-game test commands for a mod.
+description: Test a Valheim (BepInEx) mod in the running game, and in a dedicated test server, through ModTestBridge and the mtb command. Use this when asked to run a mod's in-game tests, check a fix in game, restart Valheim into the test world, test a mod's server-side behaviour on a dedicated server, run console commands in Valheim, or read the game's BepInEx log, and also when setting up ModTestBridge or writing in-game test commands for a mod.
 ---
 
 # Testing a Valheim mod in the running game
@@ -11,7 +11,8 @@ you can drive the real game:
 - read the BepInEx log;
 - see the game's state;
 - quit cleanly;
-- relaunch straight into a test world with an existing character.
+- relaunch straight into a test world with an existing character;
+- run a headless dedicated server for testing, drive it the same way, and join it from the game.
 
 The mod under development provides its own test commands. You run them and read the results.
 
@@ -42,7 +43,7 @@ Run `mtb help` for every command. The ones you'll use most:
    Note the command that runs them, the line that means "finished", and how a pass and a failure look. If the mod has
    none yet, offer to write some; [writing tests](#writing-tests-for-a-mod) is below.
 3. **Find how the mod builds and deploys** into the dev profile, such as `dotnet build` with a deploy step. Never
-   deploy into a profile someone plays on, or onto a server.
+   deploy into a profile someone plays on, or onto a server people play on.
 
 ## The loop
 1. **Build and deploy** the mod.
@@ -81,8 +82,34 @@ a marker on the map. Use `mtb shot`, then read the PNG it prints:
 
 If a test hangs, use the mod's abort command if it has one. Otherwise run `mtb restart`, after asking.
 
+## Testing on a dedicated server
+Use a dedicated test server when what you're testing only happens there: server-side patches, config sync from server
+to players, anything that crosses the network. Put `server` first and the commands go to the server's own bridge:
+
+| Command | What it does |
+|---|---|
+| `mtb server doctor` | What mtb found for the server (install, BepInEx, plugin, enabled, saves) and whether it answers |
+| `mtb server start` / `restart` | Back up its world, launch it headless with `MTB_SERVER_WORLD`, wait until it's up (`restart` stops it first) |
+| `mtb server status` | JSON: `state` (`world` when up), `dedicated`, `players` with names and positions |
+| `mtb server cmd` / `run` / `mark` / `log` / `tail` / `wait-log` | As in the game, in the server's console and log |
+| `mtb server stop` | Save its world and stop it |
+| `mtb join` | Relaunch the game straight onto the test server as `MTB_CHARACTER`, wait until in the world |
+
+- **Deploy to both** when the mod runs on both sides: the game's profile and the server's `BepInEx/plugins`. A new
+  build needs `mtb server restart`, and `mtb join` (which restarts the game) if the game's copy changed too.
+- **The server has no player of its own.** Commands that act on "the player" (`spawn`, `pos`, `god`) do nothing useful
+  there. Server tests work on world state (ZDOs, global keys, the connected peers in `mtb server status`) or on
+  a player that joined with `mtb join`.
+- **Two logs.** A test that crosses the network may log on both sides: take `mtb mark` and `mtb server mark` before,
+  then read `mtb log` and `mtb server log` after.
+- **No screenshots in the server.** Take them in the game.
+- Starting and stopping the test server doesn't touch the user's screen, so it needs no asking. `mtb join` restarts the
+  game, so **ask first**, as for `mtb restart`.
+- mtb only ever stops the server it started. Leave any other `valheim_server` on the machine alone.
+
 ## Rules
-- **Dev profiles only.** Don't install or enable ModTestBridge on a profile someone plays on, or on a server.
+- **Dev profiles only.** Don't install or enable ModTestBridge on a profile someone plays on, or on a server people
+  play on. A test server of the user's own is fine.
 - **The game is the user's.** Ask before `mtb restart`, `mtb quit`, or anything that changes their world in ways a test
   wouldn't, such as deleting things they built or teleporting them far away. Tests should clean up after themselves.
 - **Cheat commands need `devcommands` on.** Turn it on in the test setup, or once with `mtb cmd devcommands`. Note that
@@ -109,6 +136,13 @@ The user does these steps, guided by you:
    repository's README, "Configuring mtb".
 5. **Check it.** `mtb doctor` should show the profile, `enabled: true`, a token, a launch command, and the bridge
    answering.
+
+For a dedicated test server, the user also:
+1. installs *Valheim Dedicated Server* from Steam (Library > Tools);
+2. unzips BepInExPack_Valheim into its folder, or into a folder of its own named by `MTB_SERVER_PROFILE_DIR`;
+3. puts `ModTestBridge.dll` and the mod under that folder's `BepInEx/plugins/`;
+4. writes `BepInEx/config/Spronglehump.ModTestBridge.cfg` there with `[General]` and `Enabled = true`;
+5. sets `MTB_SERVER_WORLD` in `.mtb`, and checks with `mtb server doctor`.
 
 ## Writing tests for a mod
 If the mod has no tests, propose test commands in this pattern:

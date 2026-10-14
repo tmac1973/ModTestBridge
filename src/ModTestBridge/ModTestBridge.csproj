@@ -10,7 +10,7 @@
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <OutputPath>bin/$(Configuration)/</OutputPath>
     <!-- Keep in sync with package/manifest.json and Plugin.Version. -->
-    <Version>0.2.1</Version>
+    <Version>0.3.0</Version>
   </PropertyGroup>
 
   <ItemGroup>

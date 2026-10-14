@@ -13,7 +13,8 @@ namespace ModTestBridge
     /// with that character, the way the menu's own buttons do (so the character really is loaded: no intro, no new
     /// character at the spawn stones). It refuses (staying at
     /// the menu, with the reason in /status and the log) unless the character exists and has been in that world before.
-    /// Only on the first visit to the main menu.
+    /// Or <c>-mtb-server &lt;host:port&gt; -mtb-character &lt;name&gt;</c>: join that server with that character (Valheim's
+    /// own <c>-password</c> option answers a password prompt). Only on the first visit to the main menu.
     /// </summary>
     [HarmonyPatch]
     internal static class AutoStart
@@ -37,11 +38,45 @@ namespace ModTestBridge
             if (_done)
                 return;
             _done = true;
-            string? world = Arg("-mtb-world"), character = Arg("-mtb-character");
-            if (world == null || character == null)
+            string? world = Arg("-mtb-world"), server = Arg("-mtb-server"), character = Arg("-mtb-character");
+            if ((world == null && server == null) || character == null)
                 return;
             State = "pending";
-            __instance.StartCoroutine(Run(__instance, world, character));
+            __instance.StartCoroutine(server != null ? Join(__instance, server, character) : Run(__instance, world!, character));
+        }
+
+        private static PlayerProfile? FindProfile(string characterName) =>
+            SaveSystem.GetAllPlayerProfiles()
+                .FirstOrDefault(p => string.Equals(p.GetName(), characterName, StringComparison.OrdinalIgnoreCase));
+
+        private static IEnumerator Join(FejdStartup menu, string server, string characterName)
+        {
+            yield return new WaitForSeconds(2f); // the menu and its character list settle
+            try
+            {
+                PlayerProfile? profile = FindProfile(characterName);
+                if (profile == null)
+                {
+                    Fail($"no character named {characterName}");
+                    yield break;
+                }
+                var join = new ServerJoinDataDedicated(server);
+                if (join.m_host == null)
+                {
+                    Fail($"can't read the server address {server} (host:port)");
+                    yield break;
+                }
+                // The menu's own path for a queued join: Start with this character, which then joins the server.
+                menu.SetSelectedProfile(profile.GetFilename());
+                menu.m_queuedJoinServer = new ServerJoinData(join);
+                State = $"joining {server} as {profile.GetName()}";
+                Debug.Log($"ModTestBridge: autostart {State}");
+                menu.OnCharacterStart();
+            }
+            catch (Exception e)
+            {
+                Fail(e.Message);
+            }
         }
 
         private static IEnumerator Run(FejdStartup menu, string worldName, string characterName)
@@ -49,8 +84,7 @@ namespace ModTestBridge
             yield return new WaitForSeconds(2f); // the menu and its character list settle
             try
             {
-                PlayerProfile? profile = SaveSystem.GetAllPlayerProfiles()
-                    .FirstOrDefault(p => string.Equals(p.GetName(), characterName, StringComparison.OrdinalIgnoreCase));
+                PlayerProfile? profile = FindProfile(characterName);
                 if (profile == null)
                 {
                     Fail($"no character named {characterName}");

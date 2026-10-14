@@ -27,6 +27,14 @@ mtb restart [world] [character]     quit if running, back up, launch, wait until
 mtb backup [world] [character]      copy the character and world saves (only while the game isn't running)
 mtb profiles                        mod-manager profiles that have ModTestBridge installed
 mtb doctor                          show what mtb found (profile, token, launch, saves) and whether the game answers
+mtb join [character] [host:port]    quit if running, back up, launch the game onto the test server, wait for it
+
+A dedicated test server (headless, on this machine): put "server" first.
+mtb server start [world]            back up its world, launch the server (creating the world if new), wait until up
+mtb server restart [world]          stop if running, back up, start
+mtb server stop                     save and stop it
+mtb server backup [world]           copy its world (only while it isn't running)
+mtb server status|cmd|run|log|mark|tail|wait-log|wait-world|doctor   as above, in the server
 '@
 
 # Fail stops with a message and an exit code; the top level prints it. Is-Fail tells these from PowerShell's own errors.
@@ -41,7 +49,9 @@ function Warn([string]$message) { [Console]::Error.WriteLine($message) }
 # --- settings --------------------------------------------------------------------------------------------------------
 
 $SettingNames = 'MTB_PROFILE', 'MTB_PROFILE_DIR', 'MTB_PORT', 'MTB_WORLD', 'MTB_CHARACTER', 'MTB_TIMEOUT', 'MTB_LAUNCH',
-                'MTB_STEAM', 'MTB_GAME_PATTERN', 'MTB_SAVES_DIRS', 'MTB_CLOUD_DIRS', 'MTB_KEEP_BACKUPS'
+                'MTB_STEAM', 'MTB_GAME_PATTERN', 'MTB_SAVES_DIRS', 'MTB_CLOUD_DIRS', 'MTB_KEEP_BACKUPS',
+                'MTB_SERVER_DIR', 'MTB_SERVER_PROFILE_DIR', 'MTB_SERVER_PORT', 'MTB_SERVER_WORLD', 'MTB_SERVER_SAVEDIR',
+                'MTB_SERVER_GAME_PORT', 'MTB_SERVER_PASSWORD', 'MTB_SERVER_ARGS', 'MTB_SERVER_LAUNCH', 'MTB_SERVER_ADDRESS'
 $S = @{}
 
 # KEY=value lines, as the bash mtb sources them: # comments, optional quotes, optional "export".
@@ -84,7 +94,11 @@ function Split-Dirs([string]$value) { $value -split ';' | Where-Object { $_ -ne 
 
 Load-Settings
 $App = 892970
-$Port = Setting 'MTB_PORT' '7811'
+$A = @($args)
+# Every command after "server" goes to the test server.
+$Server = $A.Count -gt 0 -and "$($A[0])" -eq 'server'
+if ($Server) { $A = @($A | Select-Object -Skip 1) }
+$Port = if ($Server) { Setting 'MTB_SERVER_PORT' '7812' } else { Setting 'MTB_PORT' '7811' }
 $Url = "http://127.0.0.1:$Port"
 
 # --- where things are ------------------------------------------------------------------------------------------------
@@ -117,6 +131,7 @@ function Get-BridgeProfiles {
 $ProfileDirCache = $null
 function Get-ProfileDir {
     if ($script:ProfileDirCache) { return $script:ProfileDirCache }
+    if ($Server) { $script:ProfileDirCache = Get-ServerProfileDir; return $script:ProfileDirCache }
     $dir = Setting 'MTB_PROFILE_DIR'
     if (-not $dir) {
         $name = Setting 'MTB_PROFILE'
@@ -146,6 +161,7 @@ function Get-SteamRoot {
 
 # Folders that hold characters_local\ and worlds_local\ (and, for older saves, characters\ and worlds\).
 function Get-SavesDirs {
+    if ($Server) { return Get-ServerSavedir }
     $v = Setting 'MTB_SAVES_DIRS'
     if ($v) { return Split-Dirs $v }
     Join-Path (Get-HomeDir) 'AppData\LocalLow\IronGate\Valheim'
@@ -153,6 +169,7 @@ function Get-SavesDirs {
 
 # Steam Cloud save folders (userdata\<account>\892970\remote).
 function Get-CloudDirs {
+    if ($Server) { return }   # the server's world is only ever local
     $v = Setting 'MTB_CLOUD_DIRS'
     if ($v) { return Split-Dirs $v }
     $root = Get-SteamRoot
@@ -172,7 +189,7 @@ function Get-Token {
     if ($script:Token) { return $script:Token }
     $f = Join-Path (Get-ProfileDir) 'BepInEx\config\ModTestBridge.token'
     if (-not (Test-Path -LiteralPath $f -PathType Leaf)) {
-        Fail "no token at ${f}: run the game once with ModTestBridge enabled (Enabled = true in BepInEx\config\Spronglehump.ModTestBridge.cfg)" 2
+        Fail "no token at ${f}: run the $(if ($Server) { 'server' } else { 'game' }) once with ModTestBridge enabled (Enabled = true in BepInEx\config\Spronglehump.ModTestBridge.cfg)" 2
     }
     $script:Token = (Get-Content -LiteralPath $f -Raw).Trim()
     $script:Token
@@ -258,6 +275,7 @@ function Save-Shot([object[]]$opts) {
 
 # MTB_GAME_PATTERN here is a regex on the process name (no .exe). Never valheim_server.
 function Test-Running {
+    if ($Server) { return Test-ServerRunning }
     $pattern = Setting 'MTB_GAME_PATTERN' '^valheim$'
     $null -ne (Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match $pattern } | Select-Object -First 1)
 }
@@ -285,6 +303,183 @@ function Start-Game([string]$world, [string]$character) {
     Write-Output "launching $(Split-Path -Leaf (Get-ProfileDir)) into $world as $character"
 }
 
+# --- the dedicated test server ---------------------------------------------------------------------------------------
+
+# Steam library folders, from libraryfolders.vdf.
+function Get-SteamLibraries {
+    $root = Get-SteamRoot
+    if (-not $root) { return }
+    $root
+    $vdf = Join-Path $root 'steamapps\libraryfolders.vdf'
+    if (Test-Path -LiteralPath $vdf) {
+        foreach ($line in Get-Content -LiteralPath $vdf) {
+            if ($line -match '^\s*"path"\s*"(.*)"') { $Matches[1] -replace '\\\\', '\' }
+        }
+    }
+}
+
+# The Valheim Dedicated Server install (Steam's free "Valheim Dedicated Server" tool).
+function Get-ServerDir {
+    $dir = Setting 'MTB_SERVER_DIR'
+    if ($dir) { return $dir }
+    foreach ($l in Get-SteamLibraries) {
+        $d = Join-Path $l 'steamapps\common\Valheim dedicated server'
+        if (Test-Path -LiteralPath $d -PathType Container) { return $d }
+    }
+    Fail 'no Valheim Dedicated Server found (install it from Steam''s Tools, or set MTB_SERVER_DIR)' 2
+}
+# The folder holding the server's BepInEx\: the server install itself unless MTB_SERVER_PROFILE_DIR says otherwise.
+function Get-ServerProfileDir { $d = Setting 'MTB_SERVER_PROFILE_DIR'; if ($d) { $d } else { Get-ServerDir } }
+# Its saves stay apart from the game's, so a test world never mixes with real ones.
+function Get-ServerSavedir {
+    $d = Setting 'MTB_SERVER_SAVEDIR'
+    if ($d) { $d } else { Join-Path (Get-ServerProfileDir) 'BepInEx\ModTestBridge\server-saves' }
+}
+function Get-ServerStateDir { Join-Path (Get-ServerProfileDir) 'BepInEx\ModTestBridge' }
+function Get-ServerPid {
+    $f = Join-Path (Get-ServerStateDir) 'server.pid'
+    if (Test-Path -LiteralPath $f) { (Get-Content -LiteralPath $f -Raw).Trim() }
+}
+# Only the server mtb started (by its pid), never another one running on this machine.
+function Test-ServerRunning {
+    $id = Get-ServerPid
+    if (-not $id) { return $false }
+    $p = Get-Process -Id ([int]$id) -ErrorAction SilentlyContinue
+    $null -ne $p -and $p.ProcessName -match 'valheim_server'
+}
+function Test-ServerEnabled {
+    $cfg = Join-Path (Get-ServerProfileDir) 'BepInEx\config\Spronglehump.ModTestBridge.cfg'
+    (Test-Path -LiteralPath $cfg) -and (@(Get-Content -LiteralPath $cfg | Where-Object { $_ -match '^\s*Enabled\s*=\s*true' }).Count -gt 0)
+}
+
+# Everything a start needs, checked before anything is stopped or copied.
+function Assert-ServerReady {
+    $exe = Join-Path (Get-ServerDir) 'valheim_server.exe'
+    $prof = Get-ServerProfileDir
+    if (-not (Test-Path -LiteralPath $exe)) { Fail "no server at $exe (set MTB_SERVER_DIR)" 2 }
+    if (-not (Test-Path -LiteralPath (Join-Path $prof 'BepInEx\core\BepInEx.Preloader.dll'))) {
+        Fail "no BepInEx in ${prof}: install BepInExPack_Valheim there (see README, `"A dedicated test server`")" 2
+    }
+    if (-not (Test-Bridge $prof)) { Fail "ModTestBridge.dll isn't under $prof\BepInEx\plugins" 2 }
+    if (-not (Test-ServerEnabled)) {
+        Fail "ModTestBridge is off in the server. Put this in $prof\BepInEx\config\Spronglehump.ModTestBridge.cfg:`n[General]`nEnabled = true" 2
+    }
+}
+
+# Launch the server in the background with BepInEx from the server profile (doorstop's command-line options), the test
+# world and its own save folder, not listed publicly; output to server.out.
+function Start-Server([string]$world) {
+    $dir = Get-ServerDir; $prof = Get-ServerProfileDir; $saves = Get-ServerSavedir; $state = Get-ServerStateDir
+    New-Item -ItemType Directory -Force -Path $saves, $state | Out-Null
+    $gamePort = Setting 'MTB_SERVER_GAME_PORT' '2456'
+    $argline = "-name $(Quote "mtb $world") -port $gamePort -world $(Quote $world) -savedir $(Quote $saves) -public 0"
+    $pw = Setting 'MTB_SERVER_PASSWORD'
+    if ($pw) { $argline += " -password $(Quote $pw)" }
+    $extra = Setting 'MTB_SERVER_ARGS'
+    if ($extra) { $argline += " $extra" }
+    $out = Join-Path $state 'server.out'
+    $launch = Setting 'MTB_SERVER_LAUNCH'
+    if ($launch) {
+        $p = Start-Process -FilePath $env:ComSpec -ArgumentList "/s /c `"$launch $argline`"" -WorkingDirectory $dir `
+                -WindowStyle Hidden -RedirectStandardOutput $out -PassThru
+    } else {
+        $preloader = Join-Path $prof 'BepInEx\core\BepInEx.Preloader.dll'
+        $p = Start-Process -FilePath (Join-Path $dir 'valheim_server.exe') -WorkingDirectory $dir -WindowStyle Hidden `
+                -ArgumentList "--doorstop-enabled true --doorstop-target-assembly $(Quote $preloader) $argline" `
+                -RedirectStandardOutput $out -PassThru
+    }
+    Set-Content -LiteralPath (Join-Path $state 'server.pid') -Value $p.Id
+    Write-Output "launching the test server: world $world, port $gamePort, saves in $saves"
+}
+
+# Wait until the server has loaded its world; fail early (with its last output) if it exits.
+function Wait-Server([int]$timeout) {
+    Start-Sleep -Seconds 2
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    while ($sw.Elapsed.TotalSeconds -lt $timeout) {
+        if (-not (Test-ServerRunning)) {
+            $out = Join-Path (Get-ServerStateDir) 'server.out'
+            $tail = if (Test-Path -LiteralPath $out) { (Get-Content -LiteralPath $out -Tail 15) -join "`n" } else { '' }
+            Fail "the server stopped; the end of ${out}:`n$tail"
+        }
+        $st = $null
+        try { $st = Invoke-Bridge '/status' 'GET' $null 5 } catch { }
+        if ($st -and ($st | ConvertFrom-Json).state -eq 'world') { Write-Output $st; return }
+        Start-Sleep -Seconds 3
+    }
+    Fail 'timed out waiting for the server'
+}
+
+function Stop-Server {
+    if (-not (Test-ServerRunning)) { Write-Output "the test server isn't running"; return }
+    try { Invoke-Bridge '/quit' 'POST' '' | Out-Null } catch { }
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    while ((Test-ServerRunning) -and $sw.Elapsed.TotalSeconds -lt 90) { Start-Sleep -Seconds 2 }
+    if (Test-ServerRunning) {
+        # The bridge didn't answer. Windows has no Ctrl-C for a hidden process, so this stops it without saving.
+        Warn "the server didn't quit through the bridge; stopping it (its world isn't saved)"
+        Stop-Process -Id ([int](Get-ServerPid)) -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 3
+        if (Test-ServerRunning) { Fail "the server didn't stop (pid $(Get-ServerPid))" }
+    }
+    Remove-Item -LiteralPath (Join-Path (Get-ServerStateDir) 'server.pid') -Force -ErrorAction SilentlyContinue
+    Write-Output 'test server stopped'
+}
+
+function Set-ServerWorld([string]$world) {
+    $script:World = if ($world) { $world } else { Setting 'MTB_SERVER_WORLD' (Setting 'MTB_WORLD') }
+    $script:Character = ''
+    if (-not $script:World) { Fail 'which world? pass it, or set MTB_SERVER_WORLD (or MTB_WORLD)' 2 }
+}
+
+function Show-ServerDoctor {
+    $ok = $true
+    try { $dir = Get-ServerDir; Write-Output "server:     $dir" } catch { Write-Output "server:     ?? $($_.Exception.Message)"; $ok = $false }
+    if ($ok) {
+        $prof = Get-ServerProfileDir
+        Write-Output "profile:    $prof"
+        if (Test-Path -LiteralPath (Join-Path $prof 'BepInEx\core\BepInEx.Preloader.dll')) { Write-Output 'bepinex:    installed' }
+        else { Write-Output "bepinex:    ?? no BepInEx\core\BepInEx.Preloader.dll in $prof" }
+        if (Test-Bridge $prof) { Write-Output 'plugin:     installed' } else { Write-Output "plugin:     ?? ModTestBridge.dll not under $prof\BepInEx\plugins" }
+        if (Test-ServerEnabled) { Write-Output 'enabled:    true' }
+        else { Write-Output "enabled:    ?? not on (Enabled = true in $prof\BepInEx\config\Spronglehump.ModTestBridge.cfg)" }
+        if (Test-Path -LiteralPath (Join-Path $prof 'BepInEx\config\ModTestBridge.token')) { Write-Output 'token:      found' }
+        else { Write-Output 'token:      (none yet: written on the first start)' }
+        $bcfg = Join-Path $prof 'BepInEx\config\BepInEx.cfg'
+        if ((Test-Path -LiteralPath $bcfg) -and @(Get-Content -LiteralPath $bcfg | Where-Object { $_ -match '^\s*WriteUnityLog\s*=\s*true' }).Count -gt 0) {
+            Write-Output 'unity log:  in LogOutput.log'
+        } else { Write-Output "unity log:  ?? not in LogOutput.log: the game's own lines and Debug.Log are missing (WriteUnityLog = true in BepInEx.cfg)" }
+        Write-Output "saves:      $(Get-ServerSavedir)"
+    }
+    $w = Setting 'MTB_SERVER_WORLD' (Setting 'MTB_WORLD' '(unset: MTB_SERVER_WORLD)')
+    Write-Output "world:      $w   game port: $(Setting 'MTB_SERVER_GAME_PORT' '2456')   bridge port: $Port"
+    Write-Output "password:   $(if (Setting 'MTB_SERVER_PASSWORD') { 'set' } else { 'none (not listed publicly; anyone on your network could join)' })"
+    Write-Output "running:    $(if ($ok -and (Test-ServerRunning)) { "yes (pid $(Get-ServerPid))" } else { 'no' })"
+    if ($ok) {
+        $answer = try { Invoke-Bridge '/status' 'GET' $null 5 } catch { $_.Exception.Message }
+        Write-Output "bridge:     $answer"
+    }
+}
+
+# The game, straight onto a server (Valheim's own -password answers its password prompt).
+function Start-GameJoin([string]$address, [string]$character) {
+    $cmd = "$(Get-LaunchCmd) -console -mtb-server $(Quote $address) -mtb-character $(Quote $character)"
+    $pw = Setting 'MTB_SERVER_PASSWORD'
+    if ($pw) { $cmd += " -password $(Quote $pw)" }
+    Start-Process -FilePath $env:ComSpec -ArgumentList "/s /c `"$cmd`"" -WindowStyle Hidden | Out-Null
+    Write-Output "launching $(Split-Path -Leaf (Get-ProfileDir)) onto $address as $character"
+}
+
+function Stop-GameForRestart {
+    if (Test-Running) {
+        try { Invoke-Bridge '/quit' 'POST' '' | Out-Null } catch { }
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        while ((Test-Running) -and $sw.Elapsed.TotalSeconds -lt 120) { Start-Sleep -Seconds 2 }
+        if (Test-Running) { Fail "the game didn't quit within 120 s" }
+        Start-Sleep -Seconds 3
+    }
+}
+
 $World = $null; $Character = $null
 function Set-Names([string]$world, [string]$character) {
     $script:World = if ($world) { $world } else { Setting 'MTB_WORLD' }
@@ -298,8 +493,8 @@ $BackedUp = $false
 # Copies of the character and world (local and Steam Cloud saves), taken while the game isn't running; newest N kept.
 function Backup-Saves {
     $script:BackedUp = $false
-    if (Test-Running) { Warn 'not backing up while the game is running (saves may be half-written)'; return }
-    $c = $Character.ToLowerInvariant(); $w = $World.ToLowerInvariant()
+    if (Test-Running) { Warn "not backing up while the $(if ($Server) { 'server' } else { 'game' }) is running (saves may be half-written)"; return }
+    $c = "$Character".ToLowerInvariant(); $w = "$World".ToLowerInvariant()
     $root = Join-Path (Get-ProfileDir) 'BepInEx\ModTestBridge\backups'
     $dest = Join-Path $root (Get-Date -Format 'yyyyMMdd-HHmmss')
     New-Item -ItemType Directory -Force -Path $dest | Out-Null
@@ -311,21 +506,23 @@ function Backup-Saves {
         }
     }
     foreach ($d in Get-SavesDirs) {
-        foreach ($sub in 'characters_local', 'characters') { Copy-One (Join-Path $d "$sub\$c.fch") "$sub-$c.fch" }
-        foreach ($sub in 'worlds_local', 'worlds') {
-            Copy-One (Join-Path $d "$sub\$w") "$sub-$w"   # chunked world (current format)
-            foreach ($ext in 'db', 'fwl') { Copy-One (Join-Path $d "$sub\$w.$ext") "$sub-$w.$ext" }
+        if ($c) { foreach ($sub in 'characters_local', 'characters') { Copy-One (Join-Path $d "$sub\$c.fch") "$sub-$c.fch" } }
+        if ($w) {
+            foreach ($sub in 'worlds_local', 'worlds') {
+                Copy-One (Join-Path $d "$sub\$w") "$sub-$w"   # chunked world (current format)
+                foreach ($ext in 'db', 'fwl') { Copy-One (Join-Path $d "$sub\$w.$ext") "$sub-$w.$ext" }
+            }
         }
     }
     foreach ($d in Get-CloudDirs) {
-        Copy-One (Join-Path $d "characters\$c.fch") "cloud-$c.fch"
-        Copy-One (Join-Path $d "worlds\$w") "cloud-world-$w"
+        if ($c) { Copy-One (Join-Path $d "characters\$c.fch") "cloud-$c.fch" }
+        if ($w) { Copy-One (Join-Path $d "worlds\$w") "cloud-world-$w" }
     }
     $keep = [int](Setting 'MTB_KEEP_BACKUPS' '5')
     $all = @(Get-ChildItem -LiteralPath $root -Directory | Sort-Object Name)
     if ($all.Count -gt $keep) { $all[0..($all.Count - $keep - 1)] | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force } }
     if ($copied.Count -eq 0) {
-        Warn "warning: found no saves for $Character / $World to back up (see mtb doctor)"
+        Warn "warning: found no saves for $((@($Character, $World) | Where-Object { $_ }) -join ' / ') to back up (see mtb doctor)"
         if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Recurse -Force }
         return
     }
@@ -386,11 +583,27 @@ function Show-Doctor {
 
 # --- commands --------------------------------------------------------------------------------------------------------
 
-$A = @($args)
 # The i-th argument, or the default when it's missing or empty.
 function Get-Arg([int]$i, [string]$default = '') { if ($A.Count -gt $i -and "$($A[$i])" -ne '') { "$($A[$i])" } else { $default } }
 
 try {
+    if ($Server) {
+        switch (Get-Arg 0 'status') {
+            'start' {
+                Set-ServerWorld (Get-Arg 1)
+                if (Test-ServerRunning) { Fail 'the test server is already running (use mtb server restart)' }
+                Assert-ServerReady; Backup-Saves; Start-Server $World; Wait-Server 600; exit 0
+            }
+            'restart' { Set-ServerWorld (Get-Arg 1); Assert-ServerReady; Stop-Server; Backup-Saves; Start-Server $World; Wait-Server 600; exit 0 }
+            { $_ -in 'stop', 'quit' } { Stop-Server; exit 0 }
+            'backup' { Set-ServerWorld (Get-Arg 1); Backup-Saves; if (-not $BackedUp) { exit 1 }; exit 0 }
+            'doctor' { Show-ServerDoctor; exit 0 }
+            'shot' { Fail 'a dedicated server has no screen: take screenshots in the game (mtb shot)' 2 }
+            'wait-world' { Wait-Server ([int](Get-Arg 1 '300')); exit 0 }
+            { $_ -in 'status', 'cmd', 'run', 'log', 'tail', 'mark', 'wait-log' } { }   # the same as in the game, below
+            default { $Usage; exit 2 }
+        }
+    }
     switch (Get-Arg 0 'status') {
         'status' { Invoke-Bridge '/status' }
         'cmd' { Write-CommandOutput (Invoke-Bridge '/command' 'POST' (($A | Select-Object -Skip 1) -join ' ')) }
@@ -432,13 +645,7 @@ try {
         }
         'restart' {
             Set-Names (Get-Arg 1) (Get-Arg 2)
-            if (Test-Running) {
-                try { Invoke-Bridge '/quit' 'POST' '' | Out-Null } catch { }
-                $sw = [Diagnostics.Stopwatch]::StartNew()
-                while ((Test-Running) -and $sw.Elapsed.TotalSeconds -lt 120) { Start-Sleep -Seconds 2 }
-                if (Test-Running) { Fail "the game didn't quit within 120 s" }
-                Start-Sleep -Seconds 3
-            }
+            Stop-GameForRestart
             Backup-Saves
             Start-Game $World $Character
             Wait-World 400
@@ -447,6 +654,24 @@ try {
             Set-Names (Get-Arg 1) (Get-Arg 2)
             Backup-Saves
             if (-not $BackedUp) { exit 1 }
+        }
+        'join' {
+            $script:Character = Get-Arg 1 (Setting 'MTB_CHARACTER'); $script:World = ''
+            if (-not $Character) { Fail 'which character? pass it, or set MTB_CHARACTER' 2 }
+            $address = Get-Arg 2 (Setting 'MTB_SERVER_ADDRESS' "127.0.0.1:$(Setting 'MTB_SERVER_GAME_PORT' '2456')")
+            if (-not (Get-Arg 2) -and -not (Setting 'MTB_SERVER_ADDRESS')) {   # the local test server: is it up?
+                $up = $false
+                try {
+                    $token = (Get-Content -LiteralPath (Join-Path (Get-ServerProfileDir) 'BepInEx\config\ModTestBridge.token') -Raw).Trim()
+                    $st = Invoke-RestMethod -Uri "http://127.0.0.1:$(Setting 'MTB_SERVER_PORT' '7812')/status" -Headers @{ 'X-Token' = $token } -TimeoutSec 5
+                    $up = $st.state -eq 'world'
+                } catch { }
+                if (-not $up) { Fail "the test server isn't up: mtb server start" }
+            }
+            Stop-GameForRestart
+            Backup-Saves
+            Start-GameJoin $address $Character
+            Wait-World 400
         }
         'profiles' { Get-BridgeProfiles }
         'doctor' { Show-Doctor }

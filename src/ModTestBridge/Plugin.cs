@@ -16,15 +16,15 @@ namespace ModTestBridge
     /// <summary>
     /// A local HTTP bridge for driving the game from outside while developing mods: run console commands (and read what
     /// they print), read the BepInEx log, see the game's state, and quit. Listens on 127.0.0.1 only, and every request
-    /// needs the token written to BepInEx/config/ModTestBridge.token. For development profiles only: never install it on a
-    /// server or a profile you play on.
+    /// needs the token written to BepInEx/config/ModTestBridge.token. Works in the game and in a dedicated server (a test
+    /// server only). For development profiles only: never install it on a server people play on or a profile you play on.
     /// </summary>
     [BepInPlugin(Guid, Name, Version)]
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "Spronglehump.ModTestBridge";
         public const string Name = "ModTestBridge";
-        public const string Version = "0.2.1";
+        public const string Version = "0.3.0";
 
         private sealed class Request
         {
@@ -44,13 +44,17 @@ namespace ModTestBridge
         internal static List<string>? Capture;
         private static Plugin? _instance;
 
+        /// <summary>Running in valheim_server rather than the game (known before ZNet exists).</summary>
+        internal static readonly bool Dedicated = Paths.ProcessName.IndexOf("valheim_server", StringComparison.OrdinalIgnoreCase) >= 0;
+
         private void Awake()
         {
             _instance = this;
             _enabled = Config.Bind("General", "Enabled", false,
                 "Listen for requests (127.0.0.1 only, token required). Off until you turn it on: anything that can reach the port " +
                 "with the token can run console commands, so only on development profiles.");
-            _port = Config.Bind("General", "Port", 7811, "Local port to listen on.");
+            // A test server and the game often run side by side on one machine, so they get different ports.
+            _port = Config.Bind("General", "Port", Dedicated ? 7812 : 7811, "Local port to listen on (7811 in the game, 7812 in a dedicated server).");
             new Harmony(Guid).PatchAll(typeof(Plugin).Assembly);
             if (!_enabled.Value)
             {
@@ -65,7 +69,7 @@ namespace ModTestBridge
                 _listener.Start();
                 _thread = new Thread(Listen) { IsBackground = true, Name = "ModTestBridge" };
                 _thread.Start();
-                Logger.LogInfo($"ModTestBridge listening on 127.0.0.1:{_port.Value} (token in {TokenPath})");
+                Logger.LogInfo($"ModTestBridge listening on 127.0.0.1:{_port.Value}{(Dedicated ? " (dedicated server)" : "")} (token in {TokenPath})");
             }
             catch (Exception e)
             {
@@ -202,6 +206,8 @@ namespace ModTestBridge
                     ShotOptions? shot = ShotOptions.Parse(req.QueryString, DateTime.Now, out string error);
                     if (shot == null)
                         Respond(r.Context, 400, Json.Obj(("error", error)));
+                    else if (Dedicated)
+                        Respond(r.Context, 409, Json.Obj(("error", "a dedicated server has no screen: take screenshots in the game")));
                     else if (Camera.main == null)
                         Respond(r.Context, 409, Json.Obj(("error", Screenshot.NoCamera)));
                     else
@@ -209,6 +215,14 @@ namespace ModTestBridge
                     return;
                 }
                 case "/quit":
+                    if (Dedicated)
+                    {
+                        // The server has no menu to go back to: quitting saves the world (Game.OnApplicationQuit).
+                        Respond(r.Context, 200, Json.Obj(("quitting", true)));
+                        Logger.LogInfo("ModTestBridge: quitting the server");
+                        Application.Quit();
+                        return;
+                    }
                     _quitAtMenu = true;
                     if (Game.instance != null)
                         Game.instance.Logout(); // saves the world and character, then back to the menu, then quit
@@ -224,17 +238,38 @@ namespace ModTestBridge
         private static Dictionary<string, object?> Status()
         {
             Player p = Player.m_localPlayer;
-            string state = p != null ? "world" : Game.instance != null ? "loading" : FejdStartup.instance != null ? "menu" : "starting";
+            string state = p != null ? "world"
+                : Dedicated && ServerUp() ? "world" // a server is "in the world" once its world is loaded and it takes players
+                : Game.instance != null ? "loading" : FejdStartup.instance != null ? "menu" : "starting";
             return Json.Obj(
                 ("state", state),
                 ("world", ZNet.instance != null ? ZNet.instance.GetWorldName() : null),
                 ("character", p != null ? p.GetPlayerName() : null),
-                ("position", p != null ? new[] { p.transform.position.x, p.transform.position.y, p.transform.position.z } : null),
+                ("position", p != null ? Vec(p.transform.position) : null),
                 ("server", ZNet.instance != null && ZNet.instance.IsServer()),
+                ("dedicated", Dedicated),
+                ("players", Players()),
                 ("fps", Time.deltaTime > 0f ? 1f / Time.deltaTime : 0f),
                 ("time", Time.time),
                 ("autostart", AutoStart.State),
                 ("bridge", Version));
+        }
+
+        private static bool ServerUp() =>
+            ZNet.instance != null && ZNet.instance.IsServer() && Game.instance != null && ZoneSystem.instance != null && ZNetScene.instance != null;
+
+        private static float[] Vec(Vector3 v) => new[] { v.x, v.y, v.z };
+
+        /// <summary>The other players connected to this server (the server's view); null in the game unless it hosts.</summary>
+        private static List<object>? Players()
+        {
+            if (ZNet.instance == null || !ZNet.instance.IsServer())
+                return null;
+            var players = new List<object>();
+            foreach (ZNetPeer peer in ZNet.instance.GetPeers())
+                if (peer.IsReady())
+                    players.Add(Json.Obj(("name", peer.m_playerName), ("position", Vec(peer.m_refPos))));
+            return players;
         }
 
         internal static void Log(string message) => _instance?.Logger.LogInfo(message);
