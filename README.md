@@ -79,6 +79,8 @@ mtb log 1234 "[TEST]"               # ...and the lines after it, optionally only
 mtb tail 40 "Error"                 # the last 40 lines (containing "Error")
 mtb wait-log "[TEST] done" 600      # wait for a new log line
 mtb wait-world                      # wait until a character is in a world
+mtb shot hud                        # a screenshot of what the player sees, UI included; prints the PNG's path
+mtb shot cook --at 10,32,5 --look 10,31.7,8 --fov 30 --day   # from a camera of its own (no UI), at noon
 mtb quit                            # save, log out, quit
 mtb restart [world] [character]     # quit if running, back up the saves, relaunch straight into the world, wait for it
 mtb start [world] [character]       # the same, when the game isn't running
@@ -86,6 +88,18 @@ mtb backup                          # back up the test character and world now (
 mtb profiles                        # mod-manager profiles with ModTestBridge installed
 mtb doctor                          # what mtb found, and whether the game answers
 ```
+
+**Screenshots.** For what a log line can't tell you: a model, a hat, a panel's layout. `mtb shot [name]` saves
+`<profile>/BepInEx/ModTestBridge/screenshots/<name>.png` (a dated name if you give none) and prints its path, so an agent
+can read the picture. Options:
+- `--size PX`: the longer side, 768 by default. Full-size frames cost an agent many tokens; go bigger only for detail.
+- `--at x,y,z --look x,y,z [--fov D]`: a camera of its own, at one point looking at another, in world coordinates
+  (`mtb status` gives the player's position). The player's view is left alone and there's no UI. This camera doesn't
+  draw grass or the game's post-processing, so pictures look flatter than the game does.
+- `--day`: noon for the shot, then the time of day is put back. Night shots are hard to read.
+
+Without `--at`, the picture is the game window, so the game has to be drawing: a minimised window gives a black picture,
+which `mtb shot` reports (exit code 3).
 
 **Restart and backups.**
 - `mtb restart` saves and quits the game, then copies the test character and world (local and Steam Cloud saves) to
@@ -171,6 +185,7 @@ It also asks before taking over the screen.
 | `GET /status` | | `state` (`starting`, `menu`, `loading`, `world`), `world`, `character`, `position`, `server`, `fps`, `time`, `autostart`, `bridge` (version) |
 | `POST /command` | body: the command (or `?c=`) | `{"command": "...", "output": [lines the console printed while it ran]}` |
 | `GET /log?from=N&contains=TEXT` | | `{"from": N, "next": M, "lines": [...]}`: lines of `BepInEx/LogOutput.log` from line N (0-based), optionally only those containing TEXT; continue from `next` |
+| `GET /screenshot?name=N&size=PX` | `&at=x,y,z&look=x,y,z&fov=D` for a camera of its own; `&day=1` for noon | `{"file", "relative" (to the profile), "width", "height", "mode" ("screen"/"camera"), "blank"}`: answers once the PNG is saved |
 | `POST /quit` | | Logs out (which saves the world and character), then quits at the main menu |
 
 - **Commands.** These run with the console's checks skipped, but devcommands still has to be on for cheat commands, as

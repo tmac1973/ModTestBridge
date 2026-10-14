@@ -17,6 +17,10 @@ mtb mark                            the log's current line number (pass it to mt
 mtb tail [n] [contains]             the last n (default 40) log lines, optionally only those containing text
 mtb wait-log "<text>" [s]           wait (default 600 s) for a new log line containing text; prints it
 mtb wait-world [s]                  wait (default 300 s) until a character is in a world
+mtb shot [name] [options]           save a screenshot, print its path (PNG; read it to see the game)
+     --size PX                         longer side in pixels (default 768; the screen is scaled down to it)
+     --at x,y,z --look x,y,z [--fov D] from a camera of its own at one point looking at another (no UI)
+     --day                             at noon (the time of day is put back afterwards)
 mtb quit                            save, log out and quit the game
 mtb start [world] [character]       back up the saves, launch the game straight into the world (autostart)
 mtb restart [world] [character]     quit if running, back up, launch, wait until in the world
@@ -226,6 +230,30 @@ function Write-CommandOutput([string]$text) {
     if (Has-Prop $d 'output') { if ($d.output) { $d.output } } else { $text }
 }
 
+# A screenshot: the query is built from the options, the answer names the file relative to the profile.
+function Save-Shot([object[]]$opts) {
+    $q = @()
+    for ($i = 0; $i -lt $opts.Count; $i++) {
+        $o = "$($opts[$i])"
+        if ($o -in '--size', '--at', '--look', '--fov') {
+            if ($i + 1 -ge $opts.Count) { Fail "mtb shot: $o needs a value" 2 }
+            $i++
+            $q += "$($o.Substring(2))=$([Uri]::EscapeDataString("$($opts[$i])"))"
+        } elseif ($o -eq '--day') { $q += 'day=1' }
+        elseif ($o.StartsWith('-')) { Fail "mtb shot: unknown option $o (see mtb help)" 2 }
+        else { $q += "name=$([Uri]::EscapeDataString($o))" }
+    }
+    $timeout = [int](Setting 'MTB_TIMEOUT' '60')
+    $d = Invoke-Bridge "/screenshot?$($q -join '&')" 'GET' $null $timeout | ConvertFrom-Json
+    if (-not (Has-Prop $d 'relative')) {
+        $e = if (Has-Prop $d 'error') { $d.error } else { "$d" }
+        if ($e -eq 'unknown path') { Fail 'mtb shot: this ModTestBridge has no screenshots (update the plugin to 0.2.0 or later)' }
+        Fail "mtb shot: $e"
+    }
+    Join-Path (Get-ProfileDir) ($d.relative -replace '/', '\')
+    if ($d.blank) { Fail 'mtb shot: the picture is black: is the game window minimised or hidden?' 3 }
+}
+
 # --- the game process ------------------------------------------------------------------------------------------------
 
 # MTB_GAME_PATTERN here is a regex on the process name (no .exe). Never valheim_server.
@@ -394,6 +422,7 @@ try {
             Wait-Log $A[1] ([int](Get-Arg 2 '600')) (Get-LogNext)
         }
         'wait-world' { Wait-World ([int](Get-Arg 1 '300')) }
+        'shot' { Save-Shot @($A | Select-Object -Skip 1) }
         'quit' { Invoke-Bridge '/quit' 'POST' '' }
         'start' {
             Set-Names (Get-Arg 1) (Get-Arg 2)

@@ -27,6 +27,7 @@ Run `mtb help` for every command. The ones you'll use most:
 | `mtb log <mark> "<text>"` | Log lines since the mark, only those containing the text |
 | `mtb tail [n] [text]` | The last n log lines |
 | `mtb restart` | Save and quit, back up the test saves, relaunch into `MTB_WORLD` as `MTB_CHARACTER`, wait until in the world (~40 s) |
+| `mtb shot [name] [--at x,y,z --look x,y,z] [--day]` | Save a screenshot and print its path; read the PNG to see the game |
 | `mtb quit` | Save, log out, quit |
 
 ## Before you start
@@ -66,6 +67,17 @@ Run `mtb help` for every command. The ones you'll use most:
    - Report each failure with its expected and actual values.
 5. **Fix and repeat.** When you're done, leave the game in the world. Don't quit unless asked, because the user may want
    to look.
+
+**Looking at the game.** Some things can't be checked in a log: a model's size and placement, a hat, a panel's layout,
+a marker on the map. Use `mtb shot`, then read the PNG it prints:
+- `mtb shot <name>` is the game window as the player sees it, UI included. Open the panel or menu first (with the mod's
+  test command, or `mtb cmd`).
+- `mtb shot <name> --at x,y,z --look x,y,z --fov 30` is a close-up from a camera of its own (no UI, the player's view
+  untouched). For something on a creature, aim at it from a metre or two away; a mod's test command can log the
+  coordinates for you. This camera draws no grass and no post-processing.
+- Add `--day` when it's night. Keep the default size (768) unless you need detail: big images cost many tokens.
+- Exit code 3 means a black picture: the game window is minimised or hidden. Ask the user to bring it up.
+- Look at it from more than one side, and say what you saw. A picture shows where something is, not that it works.
 
 If a test hangs, use the mod's abort command if it has one. Otherwise run `mtb restart`, after asking.
 

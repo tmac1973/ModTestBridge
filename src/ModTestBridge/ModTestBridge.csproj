@@ -10,7 +10,7 @@
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <OutputPath>bin/$(Configuration)/</OutputPath>
     <!-- Keep in sync with package/manifest.json and Plugin.Version. -->
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -26,6 +26,8 @@
     <Reference Include="UnityEngine" HintPath="$(ManagedDir)/UnityEngine.dll" Private="false" />
     <Reference Include="UnityEngine.UI" HintPath="$(ManagedDir)/UnityEngine.UI.dll" Private="false" />
     <Reference Include="UnityEngine.CoreModule" HintPath="$(ManagedDir)/UnityEngine.CoreModule.dll" Private="false" />
+    <Reference Include="UnityEngine.ImageConversionModule" HintPath="$(ManagedDir)/UnityEngine.ImageConversionModule.dll" Private="false" />
+    <Reference Include="UnityEngine.ScreenCaptureModule" HintPath="$(ManagedDir)/UnityEngine.ScreenCaptureModule.dll" Private="false" />
   </ItemGroup>
 
   <!-- Copy the built plugin into each dev profile. -->

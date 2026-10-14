@@ -23,7 +23,7 @@ test and read the failures without clicking through anything.
 
 You'll find:
 - **setup and the full guide:** the HTTP API, autostart, backups;
-- **`mtb`**, the command-line client: `mtb restart`, `mtb run "mymod_test all" "[TEST] done"`, `mtb doctor`...;
+- **`mtb`**, the command-line client: `mtb restart`, `mtb run "mymod_test all" "[TEST] done"`, `mtb shot`, `mtb doctor`...;
 - **the Claude Code plugin**, a skill that teaches Claude to test your mod in-game:
   `/plugin marketplace add tmac1973/ModTestBridge`;
 - **how to write in-game tests for your mod**, with an example mod and a test-runner script.

@@ -9,6 +9,10 @@
 #   mtb tail [n] [contains]             the last n (default 40) log lines, optionally only those containing text
 #   mtb wait-log "<text>" [s]           wait (default 600 s) for a new log line containing text; prints it
 #   mtb wait-world [s]                  wait (default 300 s) until a character is in a world
+#   mtb shot [name] [options]           save a screenshot, print its path (PNG; read it to see the game)
+#        --size PX                         longer side in pixels (default 768; the screen is scaled down to it)
+#        --at x,y,z --look x,y,z [--fov D] from a camera of its own at one point looking at another (no UI)
+#        --day                             at noon (the time of day is put back afterwards)
 #   mtb quit                            save, log out and quit the game
 #   mtb start [world] [character]       back up the saves, launch the game straight into the world (autostart)
 #   mtb restart [world] [character]     quit if running, back up, launch, wait until in the world
@@ -199,6 +203,29 @@ wait_in_world() { # timeout; fails early if autostart refused
   echo "timed out waiting for the world" >&2; return 1
 }
 
+# A screenshot: the query is built from the options, the answer names the file relative to the profile.
+shot() {
+  local q="" out
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --size|--at|--look|--fov) [[ $# -ge 2 ]] || { echo "mtb shot: $1 needs a value" >&2; exit 2; }
+                                q+="&${1#--}=$(urlq "$2")"; shift 2 ;;
+      --day) q+="&day=1"; shift ;;
+      -*) echo "mtb shot: unknown option $1 (see mtb help)" >&2; exit 2 ;;
+      *)  q+="&name=$(urlq "$1")"; shift ;;
+    esac
+  done
+  out=$(MTB_TIMEOUT="${MTB_TIMEOUT:-60}" req "$URL/screenshot?${q#&}")
+  echo "$out" | PROFILE="$(profile_dir)" json '
+import os
+if "relative" not in d:
+    e = d.get("error", d)
+    print("mtb shot: " + ("this ModTestBridge has no screenshots (update the plugin to 0.2.0 or later)" if e == "unknown path" else str(e)), file=sys.stderr); sys.exit(1)
+print(os.path.join(os.environ["PROFILE"], d["relative"]))
+if d.get("blank"):
+    print("mtb shot: the picture is black: is the game window minimised or hidden?", file=sys.stderr); sys.exit(3)'
+}
+
 doctor() {
   local dir ok=1
   echo "platform:   $([[ $WINDOWS == 1 ]] && echo Windows || { [[ -n "$(proton_prefix)" ]] && echo "Linux, Valheim under Proton" || echo "Linux, native Valheim"; })"
@@ -251,6 +278,7 @@ case "${1:-status}" in
   backup)   need_names "${2:-}" "${3:-}"; backup ;;
   profiles) bridge_profiles ;;
   doctor)   doctor ;;
-  help|-h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' ;;
-  *)      sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  shot)   shift; shot "$@" ;;
+  help|-h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *)      sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

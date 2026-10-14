@@ -24,7 +24,7 @@ namespace ModTestBridge
     {
         public const string Guid = "Spronglehump.ModTestBridge";
         public const string Name = "ModTestBridge";
-        public const string Version = "0.1.0";
+        public const string Version = "0.2.0";
 
         private sealed class Request
         {
@@ -42,9 +42,11 @@ namespace ModTestBridge
         private bool _quitAtMenu;
 
         internal static List<string>? Capture;
+        private static Plugin? _instance;
 
         private void Awake()
         {
+            _instance = this;
             _enabled = Config.Bind("General", "Enabled", false,
                 "Listen for requests (127.0.0.1 only, token required). Off until you turn it on: anything that can reach the port " +
                 "with the token can run console commands, so only on development profiles.");
@@ -195,6 +197,17 @@ namespace ModTestBridge
                     Respond(r.Context, 200, Json.Obj(("from", from), ("next", next), ("lines", lines)));
                     return;
                 }
+                case "/screenshot":
+                {
+                    ShotOptions? shot = ShotOptions.Parse(req.QueryString, DateTime.Now, out string error);
+                    if (shot == null)
+                        Respond(r.Context, 400, Json.Obj(("error", error)));
+                    else if (Camera.main == null)
+                        Respond(r.Context, 409, Json.Obj(("error", "no camera yet")));
+                    else
+                        StartCoroutine(Screenshot.Take(r.Context, shot)); // answers when the picture is saved
+                    return;
+                }
                 case "/quit":
                     _quitAtMenu = true;
                     if (Game.instance != null)
@@ -202,7 +215,8 @@ namespace ModTestBridge
                     Respond(r.Context, 200, Json.Obj(("quitting", true)));
                     return;
                 default:
-                    Respond(r.Context, 404, Json.Obj(("error", "unknown path"), ("paths", new[] { "/status", "/command", "/log?from=N&contains=TEXT", "/quit" })));
+                    Respond(r.Context, 404, Json.Obj(("error", "unknown path"), ("paths", new[] { "/status", "/command", "/log?from=N&contains=TEXT",
+                        "/screenshot?name=N&size=PX[&at=x,y,z&look=x,y,z&fov=DEG][&day=1]", "/quit" })));
                     return;
             }
         }
@@ -223,7 +237,9 @@ namespace ModTestBridge
                 ("bridge", Version));
         }
 
-        private static void Respond(HttpListenerContext ctx, int code, object body)
+        internal static void Log(string message) => _instance?.Logger.LogInfo(message);
+
+        internal static void Respond(HttpListenerContext ctx, int code, object body)
         {
             try
             {
